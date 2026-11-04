@@ -1,0 +1,9 @@
+; Undecorated export names (needed for 32-bit __stdcall exports).
+LIBRARY fat12
+EXPORTS
+  CreateObject PRIVATE
+  GetNumberOfFormats PRIVATE
+  GetHandlerProperty PRIVATE
+  GetHandlerProperty2 PRIVATE
+  GetIsArc PRIVATE
+  GetModuleProp PRIVATE

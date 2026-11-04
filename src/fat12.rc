@@ -1,0 +1,37 @@
+// fat12.rc - version information shown in Explorer (Properties > Details).
+#include <winver.h>
+#include "version.h"
+
+#ifdef _WIN64
+#define FAT12_ARCH "x64"
+#else
+#define FAT12_ARCH "x86"
+#endif
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION FAT12_VER_MAJOR, FAT12_VER_MINOR, FAT12_VER_PATCH, 0
+PRODUCTVERSION FAT12_VER_MAJOR, FAT12_VER_MINOR, FAT12_VER_PATCH, 0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_DLL
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "FileDescription", "FAT12 floppy image plugin for 7-Zip (" FAT12_ARCH ")"
+      VALUE "FileVersion", FAT12_VER_STR
+      VALUE "InternalName", "fat12"
+      VALUE "OriginalFilename", "fat12.dll"
+      VALUE "ProductName", "7-Zip FAT12 plugin"
+      VALUE "ProductVersion", FAT12_VER_STR
+      VALUE "Comments", "Format f12: list, extract, create and update FAT12 floppy images"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

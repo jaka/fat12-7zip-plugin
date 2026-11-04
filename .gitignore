@@ -1,0 +1,27 @@
+# build output (make, build_mingw.sh, tests, fuzzing, CMake)
+/build/
+/dist/
+/out/
+CMakeCache.txt
+CMakeFiles/
+
+# fuzzer artifacts written to the working directory
+fuzz-crash.img
+crash-*
+leak-*
+timeout-*
+
+# compiler / editor droppings
+*.o
+*.obj
+*.res
+*.so
+*.dll
+*.exp
+*.lib
+*.pdb
+*.ilk
+.vs/
+.vscode/
+*~
+*.swp
