@@ -152,6 +152,11 @@ private:
   std::u16string label_;
   uint32_t serial_ = 0;
   bool warning_ = false;
+  // Parse budgets: keep work and memory proportional to the input size even
+  // for hostile images (cross-linked directories, deep long paths).
+  std::vector<bool> dirSeen_;  // directory first clusters already parsed
+  uint64_t dirBytesLeft_ = 0;  // directory bytes we may still parse
+  uint64_t pathCharsLeft_ = 0; // path characters we may still store
 };
 
 // Quick check for 7-Zip signature probing.  0 = no, 1 = yes, 2 = need more.

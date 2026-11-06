@@ -773,6 +773,13 @@ private:
     }
     else {
       opt.geo = img_.Geo();
+      // The geometry comes from the old boot sector, which may claim far
+      // more than the file holds; don't build a multi-GB image from it.
+      if (opt.geo.ImageBytes() > kMaxImageBytes) {
+        ReportError("the image's boot sector describes a disk larger than " +
+                    std::to_string(kMaxImageBytes >> 20) + " MB; use -msize= to rebuild it");
+        return E_INVALIDARG;
+      }
     }
     if (labelSet_)
       opt.label = label_;
@@ -870,7 +877,12 @@ private:
           done += it.data.size();
         }
         else if (!img_.ReadFile(old, it.data)) {
-          ReportError("damaged file copied as-is from the old image");
+          // Copying it would replace the original with a silently truncated
+          // file.  7-Zip writes to a temporary file, so aborting here leaves
+          // the original image untouched.
+          ReportError("damaged file in the image: " + Narrow(it.path) +
+                      "\nThe image was not changed. Extract what you can, or delete that file first.");
+          return E_FAIL;
         }
       }
       if (newData) {

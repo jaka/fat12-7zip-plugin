@@ -22,6 +22,15 @@ these images.
 
 ## Install
 
+**With the installer** (Windows 2000 or later): run
+`fat12-7zip-plugin-<version>-setup.exe`. It finds every installed 7-Zip,
+checks whether each one is 32-bit or 64-bit, and copies the matching DLL into
+its `Formats` folder. If 7-Zip isn't found, it asks for the folder. Uninstall
+it from Add/Remove Programs. Silent: `setup.exe /S` (exit code 2 if no 7-Zip
+was found), `uninstall.exe /S`. Build it with `make installer` (needs NSIS 3).
+
+**By hand**:
+
 1. Build `fat12.dll` (see below). It must match 7-Zip's bitness: x64 DLL for
    64-bit 7-Zip, x86 DLL for 32-bit 7-Zip.
 2. Create a `Formats` folder next to `7z.exe`, for example
@@ -114,7 +123,7 @@ XP-compatible DLL:
 
 ```sh
 sudo apt install g++-mingw-w64-i686 g++-mingw-w64-x86-64
-./build_mingw.sh          # -> dist/x86/fat12.dll, dist/x64/fat12.dll
+make                      # -> dist/x86/fat12.dll, dist/x64/fat12.dll
 ```
 
 ### Windows 2000 / XP compatibility
@@ -147,6 +156,7 @@ against 7-Zip 26.00.
 | `src/xp_compat.cpp` | Windows XP shim for MinGW builds |
 | `src/fat12.def` | Export names |
 | `src/fat12.rc`, `src/version.h` | Version resource (Explorer → Properties → Details); bump the version in `version.h` |
+| `installer/fat12.nsi` | NSIS installer script (`make installer`) |
 | `tests/` | Linux test suite and fuzzer (see below) |
 | `tests/fuzz_regress/` | Inputs that once crashed the parser; replayed by every test run |
 

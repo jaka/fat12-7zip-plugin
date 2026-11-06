@@ -6,7 +6,7 @@ rem in the VS 2017 installer) and the Windows 7.1A SDK it brings: run first
 rem    set INCLUDE=%ProgramFiles(x86)%\Microsoft SDKs\Windows\7.1A\Include;%INCLUDE%
 rem    set LIB=%ProgramFiles(x86)%\Microsoft SDKs\Windows\7.1A\Lib;%LIB%
 rem (use ...\7.1A\Lib\x64 for 64-bit) and pass /D_USING_V110_SDK71_ via CL.
-rem For XP, building with MinGW (build_mingw.sh) is usually simpler.
+rem For XP, building with MinGW (make on Linux) is usually simpler.
 setlocal
 rem XP x86 = 5.01, XP x64 = 5.02
 set XPVER=5.01

@@ -1,4 +1,4 @@
-# build output (make, build_mingw.sh, tests, fuzzing, CMake)
+# build output (make, tests, fuzzing, CMake)
 /build/
 /dist/
 /out/

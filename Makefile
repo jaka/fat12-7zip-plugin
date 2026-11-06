@@ -1,6 +1,9 @@
 # Convenience targets (Linux host).
-#   make            build Windows DLLs into dist/ (MinGW-w64 cross-compilers)
+#   make            build Windows DLLs into dist/{x86,x64}/fat12.dll with MinGW-w64
+#                   cross-compilers; an architecture whose compiler is missing is skipped
+#                   (apt install g++-mingw-w64-x86-64 g++-mingw-w64-i686)
 #   make zip        also package dist/fat12-7zip-plugin.zip
+#   make installer  also build dist/fat12-7zip-plugin-<ver>-setup.exe (needs NSIS 3: apt install nsis)
 #   make test SRC7Z=/path/to/7zip-src/CPP   run the Linux test suite
 #   make lint       strict compiler warnings (Linux + Windows code paths),
 #                   shell syntax, and cppcheck/clang-tidy/shellcheck if installed
@@ -10,7 +13,7 @@
 #   make format-check  fail if any source is not formatted
 #   make clean      remove build/ and dist/
 
-.PHONY: all dll zip test lint fuzz format format-check clean
+.PHONY: all dll zip installer test lint fuzz format format-check clean
 
 # Strict warnings that must stay clean.  Not enabled: -Wold-style-cast,
 # -Wuseless-cast, -Wsign-conversion (reviewed: style only / guarded indices).
@@ -18,19 +21,56 @@ LINT_FLAGS = -fsyntax-only -Werror -Wall -Wextra -Wpedantic -Wshadow -Wconversio
              -Wcast-qual -Wnull-dereference -Wduplicated-cond -Wduplicated-branches \
              -Wlogical-op -Wformat=2 -Wundef -Wno-non-virtual-dtor
 WIN_DEFS   = -DUNICODE -D_UNICODE -D_WIN32_WINNT=0x0500
-SH_FILES   = build_mingw.sh tests/*.sh
+SH_FILES   = tests/*.sh
 CXX_FILES  = $(wildcard src/*.cpp src/*.h tests/*.cpp)
 
 all: dll
 
-dll:
-	./build_mingw.sh
+# ---- Windows DLLs (MinGW-w64 cross-compile) --------------------------------
+# x86 DLL: Windows 2000 and later; x64 DLL: XP x64 and later.  The PE header's
+# OS/subsystem version must say so: the linker default (6.0) won't load on 2000/XP.
+CROSS_x64   = x86_64-w64-mingw32-
+CROSS_x86   = i686-w64-mingw32-
+OSMINOR_x64 = 2   # 5.2 = XP x64
+OSMINOR_x86 = 0   # 5.0 = Windows 2000
+
+WIN_SRCS     = src/plugin.cpp src/fat12.cpp src/xp_compat.cpp
+WIN_DEPS     = $(WIN_SRCS) src/fat12.h src/7z_iface.h src/fat12.def
+WIN_CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Wno-non-virtual-dtor $(WIN_DEFS)
+WIN_LDFLAGS  = -shared -static -static-libgcc -static-libstdc++ -s -Wl,--enable-stdcall-fixup
+WIN_LIBS     = -loleaut32 -luser32
+
+# architectures whose cross-compiler is installed
+ARCHES  = $(foreach a,x64 x86,$(if $(shell command -v $(CROSS_$(a))g++),$(a)))
+MISSING = $(filter-out $(ARCHES),x64 x86)
+
+dll: $(ARCHES:%=dist/%/fat12.dll)
+	@$(foreach a,$(MISSING),echo "skip $(a): $(CROSS_$(a))g++ not installed";)
+
+dist/%/fat12.dll: $(WIN_DEPS) build/%/fat12.res.o
+	@mkdir -p $(@D)
+	$(CROSS_$*)g++ $(WIN_CXXFLAGS) $(WIN_LDFLAGS) \
+	  -Wl,--major-os-version,5,--minor-os-version,$(strip $(OSMINOR_$*)) \
+	  -Wl,--major-subsystem-version,5,--minor-subsystem-version,$(strip $(OSMINOR_$*)) \
+	  -o $@ $(WIN_SRCS) src/fat12.def build/$*/fat12.res.o $(WIN_LIBS)
+
+.PRECIOUS: build/%/fat12.res.o
+build/%/fat12.res.o: src/fat12.rc src/version.h
+	@mkdir -p $(@D)
+	$(CROSS_$*)windres -O coff -o $@ $<
+
+# ----------------------------------------------------------------------------
 
 zip: dll
 	python3 -c "import zipfile, os; z = zipfile.ZipFile('dist/fat12-7zip-plugin.zip', 'w', zipfile.ZIP_DEFLATED); \
 	[z.write(f'dist/{a}/fat12.dll', f'{a}/fat12.dll') for a in ('x86', 'x64') if os.path.exists(f'dist/{a}/fat12.dll')]; \
 	z.write('README.md'); z.close()"
 	@echo "packaged dist/fat12-7zip-plugin.zip"
+
+MAKENSIS ?= makensis
+
+installer: dist/x86/fat12.dll dist/x64/fat12.dll
+	$(MAKENSIS) -V2 -WX installer/fat12.nsi
 
 FUZZ_RUNS ?= 100000
 FUZZ_SEED ?= 1

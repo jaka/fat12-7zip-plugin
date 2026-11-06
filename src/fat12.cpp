@@ -3,7 +3,8 @@
 
 #include <algorithm>
 #include <cstring>
-#include <set>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace fat12 {
 
@@ -38,6 +39,7 @@ void SetErr(std::string *err, const std::string &msg)
 const uint32_t kMaxFat12Clusters = 4084; // >= 4085 clusters means FAT16
 const unsigned kMaxDepth = 64;
 const size_t kMaxItems = 1u << 20;
+const uint64_t kMaxPathChars = 16u << 20; // 32 MiB of UTF-16 paths in total
 
 // Code page 437, bytes 0x80..0xFF.
 // clang-format off
@@ -55,6 +57,21 @@ const char16_t kCp437[128] = {
 char16_t OemToUnicode(uint8_t c)
 {
   return c < 0x80 ? (char16_t)c : kCp437[c - 0x80];
+}
+
+// Inverse of OemToUnicode; characters CP437 cannot represent become '_'.
+uint8_t UnicodeToOem(char16_t c)
+{
+  if (c < 0x80) return (uint8_t)c;
+  for (unsigned i = 0; i < 128; i++)
+    if (kCp437[i] == c) return (uint8_t)(0x80 + i);
+  return '_';
+}
+
+// A volume label as the 11 space-padded CP437 bytes stored on disk.
+void LabelBytes(const std::u16string &label, uint8_t out[11])
+{
+  for (size_t k = 0; k < 11; k++) out[k] = k < label.size() ? UnicodeToOem(label[k]) : (uint8_t)' ';
 }
 
 char16_t Upper(char16_t c)
@@ -333,7 +350,7 @@ bool Image::Open(std::vector<uint8_t> data, std::string *err)
     SetErr(err, "file too small");
     return false;
   }
-  const uint8_t *p = data_.data(); // refreshed after resize below
+  const uint8_t *p = data_.data();
   bool ok = ParseBpb(p, geo_);
   if (ok) {
     if (p[38] == 0x29) {
@@ -376,11 +393,15 @@ bool Image::Open(std::vector<uint8_t> data, std::string *err)
     SetErr(err, "image is truncated");
     return false;
   }
-  if (data_.size() < geo_.ImageBytes()) {
-    warning_ = true; // truncated data area: pad so reads stay in bounds
-    data_.resize((size_t)geo_.ImageBytes(), 0);
-    p = data_.data(); // resize may have moved the buffer
-  }
+  // A truncated data area is not padded: the BPB alone could claim ~2 GiB.
+  // ReadChain() treats clusters past the end of the file as a broken chain.
+  if (data_.size() < geo_.ImageBytes()) warning_ = true;
+
+  // Every directory cluster is parsed at most once in a sane image, so the
+  // data area bounds the total directory bytes (and thus the item count).
+  dirSeen_.assign((size_t)clusters + 2, false);
+  dirBytesLeft_ = (uint64_t)clusters * geo_.ClusterBytes();
+  pathCharsLeft_ = kMaxPathChars;
 
   const uint8_t *root = data_.data() + (size_t)geo_.FirstRootSector() * geo_.bytesPerSector;
   ParseDir(root, geo_.rootEntries, -1, std::u16string(), 0);
@@ -424,6 +445,7 @@ bool Image::ReadChain(uint16_t first, uint64_t maxBytes, std::vector<uint8_t> &o
     const size_t off =
         ((size_t)geo_.FirstDataSector() + (size_t)(c - 2) * geo_.sectorsPerCluster) * geo_.bytesPerSector;
     size_t n = (size_t)std::min<uint64_t>(cb, maxBytes - out.size());
+    if (off > data_.size() || n > data_.size() - off) return false; // past the end of a truncated image
     out.insert(out.end(), data_.begin() + off, data_.begin() + off + n);
     uint16_t next = FatEntry(c);
     if (next >= 0xFF8) return true; // end of chain
@@ -483,7 +505,7 @@ void Image::ParseDir(const uint8_t *p, size_t numEntries, int parent, const std:
 
     if (attr & kAttrVolume) {
       if (parent < 0 && label_.empty()) {
-        for (int k = 0; k < 11; k++) label_ += OemToUnicode(e[k]);
+        for (int k = 0; k < 11; k++) label_ += OemToUnicode((k == 0 && e[0] == 0x05) ? 0xE5 : e[k]);
         while (!label_.empty() && label_.back() == u' ') label_.pop_back();
       }
       continue;
@@ -519,10 +541,12 @@ void Image::ParseDir(const uint8_t *p, size_t numEntries, int parent, const std:
     for (char16_t &c : name)
       if (c == u'/' || c == u'\\' || c < 0x20) c = u'_';
 
-    if (items_.size() >= kMaxItems) {
+    const uint64_t pathChars = (uint64_t)prefix.size() + name.size() + shortName.size();
+    if (items_.size() >= kMaxItems || pathChars > pathCharsLeft_) {
       warning_ = true;
       return;
     }
+    pathCharsLeft_ -= pathChars;
     Entry it;
     it.path = prefix + name;
     it.shortName = shortName;
@@ -546,19 +570,21 @@ void Image::ParseDir(const uint8_t *p, size_t numEntries, int parent, const std:
         warning_ = true;
         continue;
       }
-      // Guard against directory loops: an ancestor with the same cluster.
-      bool loop = false;
-      for (int a = parent; a >= 0; a = items_[a].parent)
-        if (items_[a].firstCluster == it.firstCluster) {
-          loop = true;
-          break;
-        }
-      if (loop || it.firstCluster < 2) {
+      // Parse each directory cluster chain once: this stops loops (an
+      // ancestor's cluster) and cross-linked siblings that would otherwise
+      // expand the same subtree again and again.
+      if (it.firstCluster < 2 || it.firstCluster >= dirSeen_.size() || dirSeen_[it.firstCluster]) {
+        warning_ = true;
+        continue;
+      }
+      dirSeen_[it.firstCluster] = true;
+      if (dirBytesLeft_ == 0) { // budget used up: directory chains are cross-linked
         warning_ = true;
         continue;
       }
       std::vector<uint8_t> dir;
-      if (!ReadChain(it.firstCluster, 65536u * 32, dir)) warning_ = true;
+      if (!ReadChain(it.firstCluster, std::min<uint64_t>(65536u * 32, dirBytesLeft_), dir)) warning_ = true;
+      dirBytesLeft_ -= dir.size();
       std::u16string sub = items_[idx].path + u"/";
       ParseDir(dir.data(), dir.size() / 32, idx, sub, depth + 1);
     }
@@ -567,57 +593,72 @@ void Image::ParseDir(const uint8_t *p, size_t numEntries, int parent, const std:
 
 // ================================================================ writing
 
-std::u16string MakeShortName(const std::u16string &longName, const std::vector<std::u16string> &existing,
-                             bool *needLfn, uint8_t *caseFlags)
+namespace {
+
+// Short names already used in one directory, plus the next ~N tail to try
+// for each basis name.  Every tail below a basis's counter is known to be
+// taken, so starting there gives the same result as starting at ~1, without
+// re-testing them for every file (which made big directories cubic).
+struct ShortNameState {
+  std::unordered_set<std::u16string> used;
+  std::unordered_map<std::u16string, unsigned> nextTail; // key: basis base + '.' + ext
+};
+
+std::u16string Pad83(std::u16string b, std::u16string e)
+{
+  b.resize(8, u' ');
+  e.resize(3, u' ');
+  return b + e;
+}
+
+// Step 1 of MakeShortName: is `longName` already a valid 8.3 name (possibly
+// all-lowercase base and/or ext) that is still free?  Sets *needLfn for
+// mixed case, which keeps the exact spelling in an LFN.
+bool ExactShortName(const std::u16string &longName, const ShortNameState &st, std::u16string &out,
+                    bool *needLfn, uint8_t *caseFlags)
 {
   *needLfn = false;
   *caseFlags = 0;
-  auto exists = [&](const std::u16string &s) {
-    for (const auto &x : existing)
-      if (x == s) return true;
-    return false;
-  };
-  auto pad = [](std::u16string b, std::u16string e) {
-    b.resize(8, u' ');
-    e.resize(3, u' ');
-    return b + e;
-  };
-
-  // 1. Already a valid 8.3 name (possibly all-lowercase base and/or ext)?
-  {
-    const size_t dot = longName.rfind(u'.');
-    std::u16string b = dot == std::u16string::npos ? longName : longName.substr(0, dot);
-    std::u16string e = dot == std::u16string::npos ? std::u16string() : longName.substr(dot + 1);
-    bool ok = !b.empty() && b.size() <= 8 && e.size() <= 3 && (dot == std::u16string::npos || !e.empty());
-    int bCase = 0, eCase = 0; // bit0 = has upper, bit1 = has lower
-    for (char16_t c : b) {
-      if (!IsShortChar(c)) ok = false;
-      if (c >= 'A' && c <= 'Z') bCase |= 1;
-      if (c >= 'a' && c <= 'z') bCase |= 2;
-    }
-    for (char16_t c : e) {
-      if (!IsShortChar(c)) ok = false;
-      if (c >= 'A' && c <= 'Z') eCase |= 1;
-      if (c >= 'a' && c <= 'z') eCase |= 2;
-    }
-    if (ok) {
-      std::u16string s = pad(b, e);
-      for (char16_t &c : s) c = Upper(c);
-      if (!exists(s)) {
-        if (bCase == 3 || eCase == 3) {
-          *needLfn = true; // mixed case: keep exact spelling in an LFN
-        }
-        else {
-          if (bCase == 2) *caseFlags |= 0x08;
-          if (eCase == 2) *caseFlags |= 0x10;
-        }
-        return s;
-      }
-    }
+  const size_t dot = longName.rfind(u'.');
+  std::u16string b = dot == std::u16string::npos ? longName : longName.substr(0, dot);
+  std::u16string e = dot == std::u16string::npos ? std::u16string() : longName.substr(dot + 1);
+  if (b.empty() || b.size() > 8 || e.size() > 3 || (dot != std::u16string::npos && e.empty())) return false;
+  int bCase = 0, eCase = 0; // bit0 = has upper, bit1 = has lower
+  for (char16_t c : b) {
+    if (!IsShortChar(c)) return false;
+    if (c >= 'A' && c <= 'Z') bCase |= 1;
+    if (c >= 'a' && c <= 'z') bCase |= 2;
   }
+  for (char16_t c : e) {
+    if (!IsShortChar(c)) return false;
+    if (c >= 'A' && c <= 'Z') eCase |= 1;
+    if (c >= 'a' && c <= 'z') eCase |= 2;
+  }
+  std::u16string s = Pad83(b, e);
+  for (char16_t &c : s) c = Upper(c);
+  if (st.used.count(s)) return false;
+  if (bCase == 3 || eCase == 3) {
+    *needLfn = true;
+  }
+  else {
+    if (bCase == 2) *caseFlags |= 0x08;
+    if (eCase == 2) *caseFlags |= 0x10;
+  }
+  out = s;
+  return true;
+}
+
+// Returns a free short name for `longName` (11 chars, space padded).  Does
+// not add it to st.used; the caller does that once it keeps the name.
+std::u16string MakeShortNameIn(const std::u16string &longName, ShortNameState &st, bool *needLfn,
+                               uint8_t *caseFlags)
+{
+  std::u16string exact;
+  if (ExactShortName(longName, st, exact, needLfn, caseFlags)) return exact;
 
   // 2. Generate a basis name with a numeric tail, like Windows does.
   *needLfn = true;
+  *caseFlags = 0;
   bool lossy = false;
   std::u16string name;
   for (char16_t c : longName) {
@@ -643,11 +684,9 @@ std::u16string MakeShortName(const std::u16string &longName, const std::vector<s
         continue;
       }
       char16_t u = Upper(c);
-      if (!IsShortChar(u) || u >= 'a') { // after Upper only A-Z/digits/specials are fine
-        if (!IsShortChar(u)) {
-          u = u'_';
-          lossy = true;
-        }
+      if (!IsShortChar(u)) {
+        u = u'_';
+        lossy = true;
       }
       if (out.size() < maxLen)
         out += u;
@@ -663,17 +702,30 @@ std::u16string MakeShortName(const std::u16string &longName, const std::vector<s
   }
 
   if (!lossy) {
-    std::u16string s = pad(b, e);
-    if (!exists(s)) return s;
+    std::u16string s = Pad83(b, e);
+    if (!st.used.count(s)) return s;
   }
-  for (unsigned n = 1; n < 1000000; n++) {
+  unsigned &next = st.nextTail[b + u"." + e]; // '.' never occurs in a cleaned name
+  for (unsigned n = next ? next : 1; n < 1000000; n++) {
     std::u16string tail = u"~";
     for (char ch : std::to_string(n)) tail += (char16_t)ch;
-    std::u16string bb = b.substr(0, std::min(b.size(), 8 - tail.size())) + tail;
-    std::u16string s = pad(bb, e);
-    if (!exists(s)) return s;
+    std::u16string s = Pad83(b.substr(0, std::min(b.size(), 8 - tail.size())) + tail, e);
+    if (!st.used.count(s)) {
+      next = n + 1;
+      return s;
+    }
   }
-  return pad(u"_", e); // unreachable in practice
+  return Pad83(u"_", e); // unreachable in practice
+}
+
+} // namespace
+
+std::u16string MakeShortName(const std::u16string &longName, const std::vector<std::u16string> &existing,
+                             bool *needLfn, uint8_t *caseFlags)
+{
+  ShortNameState st;
+  st.used.insert(existing.begin(), existing.end());
+  return MakeShortNameIn(longName, st, needLfn, caseFlags);
 }
 
 namespace {
@@ -791,7 +843,7 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
   const uint32_t cb = g.ClusterBytes();
   for (Node &d : nodes) {
     if (!d.isDir) continue;
-    std::vector<std::u16string> used;
+    ShortNameState st;
     // Pass 1: names that are already valid 8.3 keep their exact short name.
     std::vector<bool> done(d.children.size(), false);
     for (int pass = 0; pass < 2; pass++) {
@@ -800,12 +852,17 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
         Node &c = nodes[d.children[k]];
         bool lfn;
         uint8_t cf;
-        std::u16string s = MakeShortName(c.name, used, &lfn, &cf);
-        if (pass == 0 && lfn) continue;
+        std::u16string s;
+        if (pass == 0) {
+          if (!ExactShortName(c.name, st, s, &lfn, &cf) || lfn) continue;
+        }
+        else {
+          s = MakeShortNameIn(c.name, st, &lfn, &cf);
+        }
         c.short11 = s;
         c.needLfn = lfn;
         c.caseFlags = cf;
-        used.push_back(s);
+        st.used.insert(s);
         done[k] = true;
       }
     }
@@ -886,8 +943,7 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
   bs[37] = 0;
   bs[38] = 0x29; // extended boot signature
   Set32(bs + 39, opt.serial ? opt.serial : (uint32_t)(opt.nowTicks / kTicksPerSec * 2654435761u));
-  std::u16string lab = opt.label.empty() ? u"NO NAME" : opt.label;
-  for (int k = 0; k < 11; k++) bs[43 + k] = k < (int)lab.size() ? (uint8_t)lab[k] : ' ';
+  LabelBytes(opt.label.empty() ? u"NO NAME" : opt.label, bs + 43);
   std::memcpy(bs + 54, "FAT12   ", 8);
   bs[510] = 0x55;
   bs[511] = 0xAA;
@@ -963,7 +1019,8 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
     size_t pos = 0;
     if (di == 0 && !opt.label.empty()) {
       uint8_t name[11];
-      for (int k = 0; k < 11; k++) name[k] = k < (int)opt.label.size() ? (uint8_t)opt.label[k] : ' ';
+      LabelBytes(opt.label, name);
+      if (name[0] == 0xE5) name[0] = 0x05; // 0xE5 would mark the entry as deleted
       writeShort(&buf[pos], name, kAttrVolume, 0, d, 0, 0);
       pos += 32;
     }
