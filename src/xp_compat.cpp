@@ -1,4 +1,4 @@
-// xp_compat.cpp - Windows XP support for MinGW-w64 builds.
+// xp_compat.cpp - MinGW-w64 runtime shims: Windows XP support, DLL size.
 //
 // GCC 13's libgcc (gthr-win32.o, pulled in by C++ exception handling)
 // imports kernel32!GetThreadId, which exists only on Vista / Server 2003
@@ -58,5 +58,13 @@ void *xp_imp_GetThreadId = (void *)&GetThreadIdShim;
 extern "C" void *xp_imp_GetThreadId __asm__("__imp__GetThreadId@4");
 void *xp_imp_GetThreadId = (void *)&GetThreadIdShim;
 #endif
+
+// Size: libstdc++'s default terminate handler prints the uncaught exception's
+// demangled type name, which links in the 48 KB C++ demangler.  That name is
+// no use to a 7-Zip user; terminate quietly, as MSVC builds do.
+#include <cstdlib>
+namespace __gnu_cxx {
+void __verbose_terminate_handler() { std::abort(); }
+} // namespace __gnu_cxx
 
 #endif

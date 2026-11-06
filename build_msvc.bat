@@ -16,11 +16,12 @@ if /i "%VSCMD_ARG_TGT_ARCH%"=="x64" set RCDEFS=/D_WIN64
 if not exist out mkdir out
 rc /nologo %RCDEFS% /fo out\fat12.res src\fat12.rc
 if errorlevel 1 exit /b 1
-cl /nologo /O2 /MT /EHsc /W4 /utf-8 /std:c++17 /LD ^
+rem /O1 /Gy /Gw + /OPT:REF,ICF: optimize for size and drop unreferenced code.
+cl /nologo /O1 /Gy /Gw /MT /EHsc /W4 /utf-8 /std:c++17 /LD ^
    /DUNICODE /D_UNICODE /D_WIN32_WINNT=0x0500 ^
    src\plugin.cpp src\fat12.cpp out\fat12.res ^
    /Fo:out\ /Fe:out\fat12.dll ^
-   /link /DEF:src\fat12.def oleaut32.lib user32.lib /SUBSYSTEM:WINDOWS,%XPVER%
+   /link /DEF:src\fat12.def oleaut32.lib user32.lib /SUBSYSTEM:WINDOWS,%XPVER% /OPT:REF /OPT:ICF
 if errorlevel 1 exit /b 1
 echo.
 echo Built out\fat12.dll - copy it to "%%ProgramFiles%%\7-Zip\Formats\" (create the folder).

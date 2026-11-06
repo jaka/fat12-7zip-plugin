@@ -81,14 +81,6 @@ char16_t Upper(char16_t c)
   return c;
 }
 
-bool EqualNoCase(const std::u16string &a, const std::u16string &b)
-{
-  if (a.size() != b.size()) return false;
-  for (size_t i = 0; i < a.size(); i++)
-    if (Upper(a[i]) != Upper(b[i])) return false;
-  return true;
-}
-
 bool IsValidBps(unsigned v)
 {
   return v == 512 || v == 1024 || v == 2048 || v == 4096;
@@ -783,6 +775,15 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
   // ---- build the directory tree
   std::vector<Node> nodes(1);
   nodes[0].isDir = true;
+  // Finds a child by name without scanning all siblings (that was quadratic
+  // for big directories).  Key: parent node index (two UTF-16 units) followed
+  // by the name upper-cased with Upper(), so names match case-insensitively.
+  std::unordered_map<std::u16string, int> childIndex;
+  auto childKey = [](int dir, const std::u16string &name) {
+    std::u16string key{(char16_t)((uint32_t)dir & 0xFFFF), (char16_t)((uint32_t)dir >> 16)};
+    for (char16_t c : name) key += Upper(c);
+    return key;
+  };
   for (size_t i = 0; i < items.size(); i++) {
     std::vector<std::u16string> parts;
     std::u16string cur;
@@ -812,12 +813,9 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
     for (size_t k = 0; k < parts.size(); k++) {
       const bool last = k + 1 == parts.size();
       const bool wantDir = !last || items[i].isDir;
-      int found = -1;
-      for (int ch : nodes[dir].children)
-        if (EqualNoCase(nodes[ch].name, parts[k])) {
-          found = ch;
-          break;
-        }
+      const std::u16string key = childKey(dir, parts[k]);
+      const auto hit = childIndex.find(key);
+      int found = hit == childIndex.end() ? -1 : hit->second;
       if (found >= 0) {
         if (nodes[found].isDir != wantDir) {
           SetErr(err, "name used both as file and directory: " + Narrow(items[i].path));
@@ -834,6 +832,7 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
         nodes.push_back(n);
         found = (int)nodes.size() - 1;
         nodes[dir].children.push_back(found);
+        childIndex.emplace(key, found);
       }
       dir = found;
     }

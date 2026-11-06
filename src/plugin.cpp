@@ -415,8 +415,13 @@ void ReportError(const std::string &msg)
     ::MessageBoxA(owner, full.c_str(), "FAT12 floppy image", MB_OK | MB_ICONERROR | MB_SETFOREGROUND | (owner ? 0 : MB_TOPMOST));
   }
   else {
-    std::fprintf(stderr, "\n%s\n", full.c_str());
-    std::fflush(stderr);
+    // WriteFile rather than fprintf: keeps MinGW's ~35 KB printf out of the DLL.
+    const HANDLE err = ::GetStdHandle(STD_ERROR_HANDLE);
+    if (err && err != INVALID_HANDLE_VALUE) {
+      full = "\r\n" + full + "\r\n";
+      DWORD written = 0;
+      ::WriteFile(err, full.data(), (DWORD)full.size(), &written, NULL);
+    }
   }
 }
 #else
@@ -671,7 +676,8 @@ public:
         uint32_t kb = 0;
         fat12::Geometry g;
         if (v.vt == VT_UI4) {
-          if (!fat12::ParseSizeSpec(FromW(std::to_wstring(v.ulVal).c_str()), kb)) return E_INVALIDARG;
+          const std::string digits = std::to_string(v.ulVal); // to_wstring would pull in MinGW's printf
+          if (!fat12::ParseSizeSpec(std::u16string(digits.begin(), digits.end()), kb)) return E_INVALIDARG;
         }
         else if (v.vt == VT_BSTR) {
           if (EqNoCase(v.bstrVal, "ask")) {

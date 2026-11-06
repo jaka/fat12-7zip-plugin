@@ -36,8 +36,11 @@ OSMINOR_x86 = 0   # 5.0 = Windows 2000
 
 WIN_SRCS     = src/plugin.cpp src/fat12.cpp src/xp_compat.cpp
 WIN_DEPS     = $(WIN_SRCS) src/fat12.h src/7z_iface.h src/fat12.def
-WIN_CXXFLAGS = -std=c++17 -O2 -Wall -Wextra -Wno-non-virtual-dtor $(WIN_DEFS)
-WIN_LDFLAGS  = -shared -static -static-libgcc -static-libstdc++ -s -Wl,--enable-stdcall-fixup
+# Keep in sync with the MinGW branch of CMakeLists.txt.
+# -Os and per-function sections + --gc-sections: drop unused code (mostly from the
+# static C++ runtime).  The DLL is small and I/O-bound, so -Os costs nothing noticeable.
+WIN_CXXFLAGS = -std=c++17 -Os -ffunction-sections -fdata-sections -Wall -Wextra -Wno-non-virtual-dtor $(WIN_DEFS)
+WIN_LDFLAGS  = -shared -static -static-libgcc -static-libstdc++ -s -Wl,--enable-stdcall-fixup,--gc-sections
 WIN_LIBS     = -loleaut32 -luser32
 
 # architectures whose cross-compiler is installed
