@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 jaka
 // fat12tool - Linux/portable CLI over the fat12 core, used by the tests.
 //   fat12tool list   <img>
 //   fat12tool extract <img> <outdir>

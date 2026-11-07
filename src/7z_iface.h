@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 jaka
 // 7z_iface.h - the subset of the 7-Zip plugin ABI used by this plugin.
 //
 // Mirrors CPP/7zip/IStream.h, IProgress.h and Archive/IArchive.h from the

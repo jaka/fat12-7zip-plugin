@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 jaka
 # Windows build of the FAT12 7-Zip format plugin (MSVC or MinGW-w64).
 # MinGW x86 DLL: Windows 2000 and later; MSVC (v141_xp) / x64: XP and later.
 # On Linux, `make` cross-compiles with the same MinGW flags as below.

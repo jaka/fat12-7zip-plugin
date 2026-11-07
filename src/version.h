@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 jaka
 // version.h - plugin version, used by the DLL version resource (fat12.rc).
 #pragma once
 #define FAT12_VER_MAJOR 1

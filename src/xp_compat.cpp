@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 jaka
 // xp_compat.cpp - MinGW-w64 runtime shims: Windows XP support, DLL size.
 //
 // GCC 13's libgcc (gthr-win32.o, pulled in by C++ exception handling)
@@ -64,7 +66,10 @@ void *xp_imp_GetThreadId = (void *)&GetThreadIdShim;
 // no use to a 7-Zip user; terminate quietly, as MSVC builds do.
 #include <cstdlib>
 namespace __gnu_cxx {
-void __verbose_terminate_handler() { std::abort(); }
+void __verbose_terminate_handler()
+{
+  std::abort();
+}
 } // namespace __gnu_cxx
 
 #endif

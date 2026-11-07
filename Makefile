@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 jaka
 # Convenience targets (Linux host).
 #   make            build Windows DLLs into dist/{x86,x64}/fat12.dll with MinGW-w64
 #                   cross-compilers; an architecture whose compiler is missing is skipped
@@ -8,7 +10,9 @@
 #   make lint       strict compiler warnings (Linux + Windows code paths),
 #                   shell syntax, and cppcheck/clang-tidy/shellcheck if installed
 #   make fuzz       fuzz the FAT12 parser with ASan/UBSan (FUZZ_RUNS=, FUZZ_SEED=);
-#                   uses libFuzzer if clang++ is installed, else a built-in driver
+#                   uses libFuzzer if clang++ is installed, else a built-in driver.
+#                   An input also fails if it is slow or memory-hungry (FUZZ_TIMEOUT=,
+#                   FUZZ_RSS_MB=, FUZZ_MALLOC_MB=)
 #   make format     reformat sources with clang-format (./.clang-format)
 #   make format-check  fail if any source is not formatted
 #   make clean      remove build/ and dist/
@@ -77,20 +81,30 @@ installer: dist/x86/fat12.dll dist/x64/fat12.dll
 
 FUZZ_RUNS ?= 100000
 FUZZ_SEED ?= 1
+# Per-input limits: seconds, peak RSS (MB), and largest single allocation (MB).
+# Hostile images once needed 1-2 GB; a sane floppy image needs a few MB.
+FUZZ_TIMEOUT   ?= 5
+FUZZ_RSS_MB    ?= 512
+FUZZ_MALLOC_MB ?= 128
+FUZZ_LIMITS = -timeout=$(FUZZ_TIMEOUT) -rss_limit_mb=$(FUZZ_RSS_MB)
 SAN_FLAGS  = -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all
 
 fuzz:
 	mkdir -p build
-	@if command -v clang++ >/dev/null; then \
+	@if printf 'extern "C" int LLVMFuzzerTestOneInput(const char *, unsigned long) { return 0; }' | \
+	    clang++ $(SAN_FLAGS) -fsanitize=fuzzer -x c++ - -o build/.fuzz_probe 2>/dev/null; then \
+	  rm -f build/.fuzz_probe; \
 	  echo "libFuzzer (clang++)"; \
 	  clang++ -std=c++17 $(SAN_FLAGS) -fsanitize=fuzzer -o build/fuzz_fat12 tests/fuzz_fat12.cpp src/fat12.cpp && \
 	  mkdir -p build/fuzz_corpus && \
-	  build/fuzz_fat12 -runs=$(FUZZ_RUNS) -seed=$(FUZZ_SEED) build/fuzz_corpus tests/fuzz_regress; \
+	  build/fuzz_fat12 -runs=$(FUZZ_RUNS) -seed=$(FUZZ_SEED) $(FUZZ_LIMITS) -malloc_limit_mb=$(FUZZ_MALLOC_MB) \
+	    -artifact_prefix=build/ build/fuzz_corpus tests/fuzz_regress; \
 	else \
-	  echo "built-in driver (g++; install clang for libFuzzer)"; \
+	  echo "built-in driver (g++; for libFuzzer install clang and its runtime, e.g. libclang-rt-dev)"; \
 	  g++ -std=c++17 $(SAN_FLAGS) -DFUZZ_STANDALONE -o build/fuzz_fat12 tests/fuzz_fat12.cpp src/fat12.cpp && \
-	  build/fuzz_fat12 tests/fuzz_regress && \
-	  build/fuzz_fat12 -runs=$(FUZZ_RUNS) -seed=$(FUZZ_SEED) -crash=build/fuzz-crash.img tests/fuzz_regress; \
+	  export ASAN_OPTIONS="max_allocation_size_mb=$(FUZZ_MALLOC_MB):allocator_may_return_null=0:$$ASAN_OPTIONS"; \
+	  build/fuzz_fat12 $(FUZZ_LIMITS) -crash=build/fuzz-crash.img tests/fuzz_regress && \
+	  build/fuzz_fat12 -runs=$(FUZZ_RUNS) -seed=$(FUZZ_SEED) $(FUZZ_LIMITS) -crash=build/fuzz-crash.img tests/fuzz_regress; \
 	fi
 
 test:
@@ -101,6 +115,7 @@ lint:
 	g++ -std=c++17 $(LINT_FLAGS) src/fat12.cpp
 	g++ -std=c++20 $(LINT_FLAGS) tests/fat12tool.cpp
 	g++ -std=c++17 $(LINT_FLAGS) -DFUZZ_STANDALONE tests/fuzz_fat12.cpp
+	g++ -std=c++17 $(LINT_FLAGS) tests/unit_fat12.cpp
 	@for cc in i686-w64-mingw32-g++ x86_64-w64-mingw32-g++; do \
 	  if command -v $$cc >/dev/null; then echo "$$cc (Windows code paths)"; \
 	    $$cc -std=c++17 $(LINT_FLAGS) $(WIN_DEFS) src/plugin.cpp src/xp_compat.cpp src/fat12.cpp || exit 1; \

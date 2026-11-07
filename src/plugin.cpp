@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 jaka
 // plugin.cpp - 7-Zip archive format plugin "FAT12" (floppy disk images).
 //
 // Copy the built DLL into the "Formats" folder next to 7z.exe / 7zFM.exe.
@@ -628,6 +630,8 @@ public:
         PropU64(v, g.ImageBytes());
         break;
       case kpidWarning:
+        if (img_.ListingIncomplete())
+          return PropStr(v, L"Some folders are damaged: not all files are listed, and the image cannot be updated");
         if (img_.HeadersWarning()) return PropStr(v, L"The file system structures are damaged");
         break;
       default:
@@ -770,6 +774,15 @@ private:
 
   HRESULT DoUpdate(ISequentialOutStream *outStream, UInt32 numItems, IArchiveUpdateCallback *cb)
   {
+    // The new image is built only from the listed items, so files in folders
+    // that could not be read would be dropped without a word.  Refuse before
+    // asking for a size; 7-Zip then leaves the original file untouched.
+    if (opened_ && img_.ListingIncomplete()) {
+      ReportError("some folders in the image are damaged, so not all files are listed; updating it "
+                  "would lose them.\nThe image was not changed. Extract what you can and create a new "
+                  "image from the extracted files.");
+      return E_FAIL;
+    }
     fat12::BuildOptions opt;
     uint32_t kb = 0;
     HRESULT hr = ChooseSize(kb);
@@ -956,7 +969,7 @@ PLUGIN_EXPORT HRESULT WINAPI GetHandlerProperty2(UInt32 index, PROPID id, PROPVA
     case NHandlerPropID::kClassID:
       return PropBin(v, &CLSID_FAT12, sizeof(GUID));
     case NHandlerPropID::kExtension:
-      return PropStr(v, L"img ima vfd flp");
+      return PropStr(v, L"ima img vfd flp"); // first one: default for new archives
     case NHandlerPropID::kUpdate:
       PropBool(v, true);
       break;

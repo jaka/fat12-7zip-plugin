@@ -1,3 +1,5 @@
+; SPDX-License-Identifier: GPL-2.0-or-later
+; Copyright (C) 2026 jaka
 ; fat12.nsi - NSIS installer for the 7-Zip FAT12 plugin (Windows 2000 and later).
 ;
 ; Copies fat12.dll into the Formats folder of every 7-Zip it finds: the x64 DLL
@@ -40,7 +42,7 @@ VIAddVersionKey ProductName "${PRODUCT}"
 VIAddVersionKey ProductVersion "${VERSION}"
 VIAddVersionKey FileVersion "${VERSION}"
 VIAddVersionKey FileDescription "${PRODUCT} Setup"
-VIAddVersionKey LegalCopyright ""
+VIAddVersionKey LegalCopyright "Copyright (C) 2026 jaka. GNU GPL v2 or later."
 
 Var Dir64     ; 64-bit 7-Zip folder
 Var Dir32     ; 32-bit 7-Zip folder
@@ -50,6 +52,13 @@ Var Dir32     ; 32-bit 7-Zip folder
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TEXT "This will install the FAT12 floppy image plugin (fat12.dll) into 7-Zip.$\r$\n$\r$\n7-Zip will then be able to create and update .img, .ima, .vfd and .flp floppy images.$\r$\n$\r$\nClose 7-Zip before continuing."
 !insertmacro MUI_PAGE_WELCOME
+
+; GPL: show the license, but do not ask the user to accept it (using the
+; program does not require accepting the GPL).
+!define MUI_LICENSEPAGE_TEXT_TOP "This plugin is free software, licensed under the GNU GPL version 2 or (at your option) any later version."
+!define MUI_LICENSEPAGE_TEXT_BOTTOM "You do not need to accept this license to use the plugin. It gives you the right to copy, change and share it under the conditions above."
+!define MUI_LICENSEPAGE_BUTTON "$(^NextBtn)"
+!insertmacro MUI_PAGE_LICENSE "../LICENSE"
 
 !define MUI_COMPONENTSPAGE_NODESC
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE ComponentsLeave
@@ -76,6 +85,9 @@ Var Dir32     ; 32-bit 7-Zip folder
 !insertmacro MUI_PAGE_INSTFILES
 
 !define MUI_FINISHPAGE_TEXT "The plugin has been installed.$\r$\n$\r$\nTo check, run 7z i: the format list should include f12 with C (can create) in the flags column.$\r$\n$\r$\nIn the 7-Zip GUI, choose Add to archive and set Archive format to f12 to create a floppy image."
+; GPL: tell where the source code is.
+!define MUI_FINISHPAGE_LINK "Source code (GNU GPL): github.com/jaka/7zip-f12"
+!define MUI_FINISHPAGE_LINK_LOCATION "https://github.com/jaka/7zip-f12"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM

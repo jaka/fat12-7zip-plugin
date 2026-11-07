@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 jaka
 # End-to-end tests: drive the real 7-Zip (Linux build) with the plugin in
 # its Formats/ folder.   Usage: tests/run_plugin_tests.sh <dir-with-7z-and-Formats> <workdir>
 set -u
@@ -69,6 +71,49 @@ head -c 800000 /dev/urandom > "$W/big.bin"
 mkfs.fat -C -n FROMMKFS "$W/m.ima" 1440 > /dev/null 2>&1
 "$Z" a "$W/m.ima" "$W/extra.txt" > /dev/null 2>&1 && "$Z" l -slt "$W/m.ima" | grep -q "Label = FROMMKFS" && fsck.fat -n "$W/m.ima" > /dev/null 2>&1 \
   && ok "update mkfs.fat image keeps label" || bad "mkfs.fat update"
+
+# --- update of a damaged image is refused and leaves the image untouched
+mkdir -p "$W/dmg"; head -c 5000 /dev/urandom > "$W/dmg/big.bin"
+"$Z" a -tf12 "$W/dmg/d.ima" "$W/dmg/big.bin" > /dev/null 2>&1 || bad "damaged: create"
+# big.bin starts at cluster 2: mark that cluster free in both FATs (chain broken)
+python3 -c "
+import sys; p=sys.argv[1]; d=bytearray(open(p,'rb').read())
+for fat in (512, 512 + 9*512): d[fat+3] = 0; d[fat+4] &= 0xF0
+open(p,'wb').write(d)" "$W/dmg/d.ima"
+before=$(md5sum < "$W/dmg/d.ima")
+"$Z" a "$W/dmg/d.ima" "$W/extra.txt" > "$W/dmg.log" 2>&1; rc=$?
+[ $rc -ne 0 ] && grep -q "damaged file in the image: big.bin" "$W/dmg.log" && ok "update of damaged image refused (rc=$rc)" || { bad "damaged update not refused"; cat "$W/dmg.log"; }
+[ "$(md5sum < "$W/dmg/d.ima")" = "$before" ] && ok "damaged image left unchanged" || bad "damaged image was modified"
+[ "$(ls "$W/dmg")" = "$(printf 'big.bin\nd.ima')" ] && ok "no temporary files left behind" || bad "leftovers: $(ls "$W/dmg")"
+"$Z" d "$W/dmg/d.ima" big.bin > /dev/null 2>&1 && "$Z" a "$W/dmg/d.ima" "$W/extra.txt" > /dev/null 2>&1 && fsck.fat -n "$W/dmg/d.ima" > /dev/null 2>&1 \
+  && ok "deleting the damaged file makes updates work again" || bad "recovery after delete"
+
+# --- update of an image whose folders are damaged is refused (hidden files would be lost)
+mkdir -p "$W/inc/src/sub"; echo keep > "$W/inc/src/keep.txt"; echo hidden > "$W/inc/src/sub/hidden.txt"
+( cd "$W/inc/src" && "$Z" a -tf12 "$W/inc/i.ima" keep.txt sub > /dev/null 2>&1 ) || bad "incomplete: create"
+# point the root entry of folder SUB at cluster 0: its contents can no longer be listed
+python3 -c "
+import sys, struct; p=sys.argv[1]; d=bytearray(open(p,'rb').read())
+bps, = struct.unpack_from('<H', d, 11); res, = struct.unpack_from('<H', d, 14)
+nf = d[16]; spf, = struct.unpack_from('<H', d, 22); root = (res + nf*spf) * bps
+for o in range(root, root + 224*32, 32):
+    if d[o:o+11] == b'SUB        ': d[o+26:o+28] = b'\\0\\0'
+open(p,'wb').write(d)" "$W/inc/i.ima"
+"$Z" l "$W/inc/i.ima" > "$W/inc.log" 2>&1
+grep -q "not all files are listed" "$W/inc.log" && ok "listing warns that files are missing" || { bad "no incomplete warning"; cat "$W/inc.log"; }
+before=$(md5sum < "$W/inc/i.ima")
+"$Z" a "$W/inc/i.ima" "$W/extra.txt" > "$W/inc.log" 2>&1; rc=$?
+[ $rc -ne 0 ] && grep -q "not all files are listed" "$W/inc.log" && ok "add to incompletely listed image refused (rc=$rc)" || { bad "incomplete add not refused"; cat "$W/inc.log"; }
+"$Z" d "$W/inc/i.ima" keep.txt > "$W/inc.log" 2>&1; rc=$?
+[ $rc -ne 0 ] && grep -q "not all files are listed" "$W/inc.log" && ok "delete from incompletely listed image refused (rc=$rc)" || { bad "incomplete delete not refused"; cat "$W/inc.log"; }
+[ "$(md5sum < "$W/inc/i.ima")" = "$before" ] && ok "incompletely listed image left unchanged" || bad "incompletely listed image was modified"
+[ "$(ls "$W/inc")" = "$(printf 'i.ima\nsrc')" ] && ok "no temporary files left behind" || bad "leftovers: $(ls "$W/inc")"
+rm -rf "$W/inc/x"; "$Z" x -o"$W/inc/x" "$W/inc/i.ima" > /dev/null 2>&1; cmp -s "$W/inc/x/keep.txt" "$W/inc/src/keep.txt" && ok "listed files still extract" || bad "extract from incompletely listed image"
+
+# --- an image with its unused end cut off is listed completely and can be updated
+( cd "$S" && "$Z" a -tf12 "$W/inc/t.ima" README.TXT > /dev/null 2>&1 ) && truncate -s 40960 "$W/inc/t.ima"
+"$Z" a "$W/inc/t.ima" "$W/extra.txt" > "$W/inc.log" 2>&1 && [ "$(stat -c %s "$W/inc/t.ima")" = 1474560 ] && fsck.fat -n "$W/inc/t.ima" > /dev/null 2>&1 \
+  && ok "truncated image can still be updated (restored to full size)" || { bad "truncated image update"; cat "$W/inc.log"; }
 
 [ $fail = 0 ] && echo "ALL PLUGIN TESTS PASSED" || echo "SOME PLUGIN TESTS FAILED"
 exit $fail

@@ -1,4 +1,6 @@
 @echo off
+rem SPDX-License-Identifier: GPL-2.0-or-later
+rem Copyright (C) 2026 jaka
 rem Build fat12.dll with Visual Studio, no CMake needed.
 rem Run from an "x86 Native Tools Command Prompt for VS 2017" (or x64 for 64-bit 7-Zip).
 rem Windows XP support needs the v141_xp toolset ("Windows XP support for C++"

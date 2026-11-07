@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 jaka
 // fat12.rc - version information shown in Explorer (Properties > Details).
 #include <winver.h>
 #include "version.h"
@@ -28,6 +30,7 @@ BEGIN
       VALUE "ProductName", "7-Zip FAT12 plugin"
       VALUE "ProductVersion", FAT12_VER_STR
       VALUE "Comments", "Format f12: list, extract, create and update FAT12 floppy images"
+      VALUE "LegalCopyright", "Copyright (C) 2026 jaka. GNU GPL v2 or later."
     END
   END
   BLOCK "VarFileInfo"

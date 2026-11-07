@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 jaka
 // fat12.h - portable FAT12 floppy image reader/writer (no OS dependencies).
 //
 // Used by the 7-Zip plugin (plugin.cpp) and by the Linux test harness.
@@ -130,6 +132,13 @@ public:
   {
     return warning_;
   } // non-fatal structural damage
+  // Part of the directory tree could not be read (broken, looped or
+  // cross-linked folders, or a parse limit hit), so files may be missing from
+  // Items().  Rebuilding the image from Items() would drop them.
+  bool ListingIncomplete() const
+  {
+    return incomplete_;
+  }
 
   // Reads the contents of file item `index`.  Returns false on a broken
   // cluster chain (data read so far is still returned in `out`).
@@ -144,6 +153,10 @@ public:
 private:
   uint16_t FatEntry(uint32_t cluster) const;
   bool ReadChain(uint16_t first, uint64_t maxBytes, std::vector<uint8_t> &out) const;
+  void Incomplete()
+  {
+    warning_ = incomplete_ = true;
+  }
   void ParseDir(const uint8_t *p, size_t numEntries, int parent, const std::u16string &prefix, int depth);
 
   std::vector<uint8_t> data_;
@@ -152,6 +165,7 @@ private:
   std::u16string label_;
   uint32_t serial_ = 0;
   bool warning_ = false;
+  bool incomplete_ = false; // implies warning_
   // Parse budgets: keep work and memory proportional to the input size even
   // for hostile images (cross-linked directories, deep long paths).
   std::vector<bool> dirSeen_;  // directory first clusters already parsed

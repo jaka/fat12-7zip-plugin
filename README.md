@@ -1,5 +1,7 @@
 # FAT12 floppy image plugin for 7-Zip
 
+[![CI](https://github.com/jaka/7zip-f12/actions/workflows/ci.yml/badge.svg)](https://github.com/jaka/7zip-f12/actions/workflows/ci.yml)
+
 A 7-Zip format plugin (`fat12.dll`) that **lists, extracts, tests, creates and
 updates** FAT12 floppy disk images. 7-Zip's built-in `FAT` handler can only read
 these images.
@@ -36,7 +38,7 @@ was found), `uninstall.exe /S`. Build it with `make installer` (needs NSIS 3).
 2. Create a `Formats` folder next to `7z.exe`, for example
    `C:\Program Files\7-Zip\Formats\`, and copy `fat12.dll` into it.
 3. Check with `7z i`. The format list should include
-   `f12  img ima vfd flp` with `C` (can create) in the flags column.
+   `f12  ima img vfd flp` with `C` (can create) in the flags column.
 
 ## Usage
 
@@ -58,6 +60,25 @@ the plugin asks which floppy size to create:
 To skip the question, type the size into the **Parameters** box, for example
 `size=1.2m` or `size=720k label=GAMES`.
 
+New images get the `.ima` extension. The dialog's *Compression level*,
+*CPU threads* and memory settings have no effect: floppy images are not
+compressed. 7-Zip enables those settings for every plugin format and doesn't
+let a plugin turn them off.
+
+### Changing an image in the File Manager
+
+Open the image (double-click it), then:
+
+- **Add files:** drag them from Explorer into the File Manager window, or
+  show two panels (F9), select files in the other panel and press F5 (Copy).
+  The *Add* toolbar button does not work here: it only creates new archives
+  from files in a normal folder, so inside an open archive it says
+  "Operation is not supported" (for every format, not just floppy images).
+- **Delete, rename, create folder:** use the usual commands (Del, F2, F7).
+
+The image keeps its size and label. If 7-Zip reports the image as read-only,
+check that it opened with this plugin (see below).
+
 ### Command line
 
 ```bat
@@ -77,7 +98,7 @@ The command-line `7z.exe` never shows a dialog. Without `-msize` it creates
 | Option | Values |
 |---|---|
 | `size` | `1.44m`, `1,44`, `1.44`, `1.2m`, `720k`, `720`, `360k`, `2.88`, `dmf`, `ask`, … (floppy "MB" = 1000 KiB, so 1.44 → 1440 KiB) |
-| `label` | up to 11 characters, upper-cased; `-mlabel=` removes the label |
+| `label` | up to 11 ASCII characters, upper-cased; not allowed: `" * + , . / : ; < = > ? [ \ ] \|`; `-mlabel=` removes the label |
 
 ### `.img` vs `.ima` / `.vfd` / `.flp`
 
@@ -100,6 +121,12 @@ tried before plugins. As a result:
   current Windows time zone.
 - Short names use ASCII. Names with other characters get an LFN plus a
   `~N` short name.
+- A damaged image is never updated, so the update cannot silently drop
+  files. If a file in it is damaged, delete that file first. If a folder is
+  damaged, 7-Zip warns that not all files are listed; extract what you can
+  and create a new image. The original image is left unchanged. An image
+  whose unused end was cut off can still be updated, and is written back at
+  full size.
 - Errors such as *disk full* or *root directory full* are shown in a message
   box (GUI) or printed to stderr (console).
 
@@ -126,6 +153,19 @@ sudo apt install g++-mingw-w64-i686 g++-mingw-w64-x86-64
 make                      # -> dist/x86/fat12.dll, dist/x64/fat12.dll
 ```
 
+### Publishing a release
+
+CI (`.github/workflows/ci.yml`) builds and tests every push. To publish a
+GitHub Release with the installer, a zip of both DLLs and their SHA-256 sums,
+set the version in `src/version.h`, commit, then push a matching tag:
+
+```sh
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+The release is created only if all tests, the fuzz run and the Windows build
+pass, and only if the tag matches `src/version.h`.
+
 ### Windows 2000 / XP compatibility
 
 - All builds use `_WIN32_WINNT=0x0500`, so the code calls only Windows 2000-era APIs.
@@ -134,7 +174,9 @@ make                      # -> dist/x86/fat12.dll, dist/x64/fat12.dll
 - The PE header says the DLL needs OS version 5.0 (x86, Windows 2000) or 5.2 (x64,
   XP x64). A DLL built with the default 6.0 would not load on 2000/XP.
 - `src/xp_compat.cpp` replaces the `kernel32!GetThreadId` import that GCC 13's
-  libgcc adds; Windows 2000 and XP x86 don't have that function.
+  libgcc adds; Windows 2000 and XP x86 don't have that function. It also
+  replaces libstdc++'s verbose terminate handler, which would link in the
+  48 KB C++ demangler.
 - MSVC builds need the `v141_xp` toolset (VS 2017). Newer toolsets can't
   target XP, and no current MSVC toolset targets Windows 2000; use MinGW for 2000.
 
@@ -153,12 +195,14 @@ against 7-Zip 26.00.
 | `src/fat12.h/.cpp` | Portable FAT12 reader/writer, with no OS dependencies |
 | `src/plugin.cpp` | 7-Zip COM handler and DLL exports, size dialog |
 | `src/7z_iface.h` | 7-Zip interface and GUID definitions |
-| `src/xp_compat.cpp` | Windows XP shim for MinGW builds |
+| `src/xp_compat.cpp` | MinGW-only shims: Windows 2000/XP support, smaller DLL |
 | `src/fat12.def` | Export names |
 | `src/fat12.rc`, `src/version.h` | Version resource (Explorer → Properties → Details); bump the version in `version.h` |
+| `LICENSE` | GNU General Public License version 2 (the project is version 2 or later) |
 | `installer/fat12.nsi` | NSIS installer script (`make installer`) |
 | `tests/` | Linux test suite and fuzzer (see below) |
-| `tests/fuzz_regress/` | Inputs that once crashed the parser; replayed by every test run |
+| `tests/fuzz_regress/` | Inputs that once crashed the parser or made it slow or memory-hungry; replayed by every test run |
+| `tests/golden/` | Reviewed expected output for the unit tests (generated short names) |
 
 ## Tests (Linux)
 
@@ -171,6 +215,27 @@ built-in FAT reader:
 # needs g++, dosfstools, the 7zip package, and the 7-Zip source tree
 tests/build_and_test_linux.sh /path/to/7zip-src/CPP
 ```
+
+It also runs `tests/unit_fat12.cpp`, which checks the core directly:
+
+- hostile images open within a heap budget, measured by replacing `operator new`
+- reads past the end of a truncated image are data errors
+- volume labels round-trip through code page 437
+- short names match the reviewed list in `tests/golden/shortnames.txt`
+- the directory tree builds into an unchanged image
+- a directory of 10,000 similar names builds in under 2 seconds
+- `Build()` refuses trees that `Image::Open` could not list completely
+  (more than 64 nested folders, or too many long paths)
+
+And `tests/handler_fat12.cpp`, which loads the plugin and drives it the way
+the 7-Zip File Manager does: it updates the image through the handler that
+opened it (the command line creates a new handler instead), then closes and
+reopens that same handler. It covers add, delete, rename, new folder,
+refused updates and creating a new image, using 7-Zip's own interface headers
+so a mismatch in `src/7z_iface.h` shows up too.
+
+If you change short-name generation on purpose, regenerate the list with
+`build/unit_fat12 tests --update-golden` and review the diff before committing.
 
 ### Fuzzing
 
@@ -185,8 +250,33 @@ make fuzz                    # 100000 runs; FUZZ_RUNS=, FUZZ_SEED= to change
 build/fuzz_fat12 crash.img   # replay one input
 ```
 
-With `clang++` installed, this uses libFuzzer. Otherwise it uses a built-in
-driver that starts from images built by `Build()` and mutates mostly the boot
-sector, FATs and directories. A crashing input is saved to
-`build/fuzz-crash.img`; after fixing the bug, add it to `tests/fuzz_regress/`.
+An input also fails if it is slow or uses too much memory, because hostile
+images can exhaust memory without ever crashing. The limits are 5 s per input
+(`FUZZ_TIMEOUT=`), 512 MB peak RSS (`FUZZ_RSS_MB=`), and 128 MB for any
+single allocation (`FUZZ_MALLOC_MB=`).
+
+With `clang++` and its sanitizer runtime installed (on Debian/Ubuntu,
+`clang` plus `libclang-rt-<version>-dev`), this uses libFuzzer and saves a
+failing input as `build/crash-*`, `build/oom-*` or `build/timeout-*`.
+Otherwise it uses a built-in driver that starts from images built by `Build()`
+and mutates mostly the boot sector, FATs and directories; it saves a failing
+input to `build/fuzz-crash.img`. After fixing the bug, add the input to
+`tests/fuzz_regress/`.
 `make test` replays that folder and runs a short fuzz pass.
+
+## License
+
+Copyright (C) 2026 jaka
+
+Source code: <https://github.com/jaka/7zip-f12>
+
+This program is free software; you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation; either version 2 of the License, or (at your option) any
+later version. It is distributed WITHOUT ANY WARRANTY; see
+[LICENSE](LICENSE) for the full text of version 2.
+
+`src/7z_iface.h` restates the 7-Zip plugin interface (vtable layouts and
+GUIDs) from the 7-Zip headers, which are LGPL 2.1 or later and so can be used
+in a program under GPL v2 or later. The Linux test build also compiles 7-Zip's
+`Common/MyWindows.cpp`, which is not part of this repository.

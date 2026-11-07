@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 jaka
 # Round-trip tests for the FAT12 core.  Verifies images we write with
 # fsck.fat (dosfstools) and 7-Zip's built-in FAT reader, and reads images
 # made by mkfs.fat.   Usage: tests/run_core_tests.sh <fat12tool> <workdir>

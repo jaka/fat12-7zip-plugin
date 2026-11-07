@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 jaka
 // fat12.cpp - portable FAT12 floppy image reader/writer.
 #include "fat12.h"
 
@@ -336,7 +338,7 @@ bool Image::Open(std::vector<uint8_t> data, std::string *err)
   items_.clear();
   label_.clear();
   serial_ = 0;
-  warning_ = false;
+  warning_ = incomplete_ = false;
 
   if (data_.size() < 512) {
     SetErr(err, "file too small");
@@ -535,7 +537,7 @@ void Image::ParseDir(const uint8_t *p, size_t numEntries, int parent, const std:
 
     const uint64_t pathChars = (uint64_t)prefix.size() + name.size() + shortName.size();
     if (items_.size() >= kMaxItems || pathChars > pathCharsLeft_) {
-      warning_ = true;
+      Incomplete();
       return;
     }
     pathCharsLeft_ -= pathChars;
@@ -559,23 +561,23 @@ void Image::ParseDir(const uint8_t *p, size_t numEntries, int parent, const std:
 
     if (it.IsDir()) {
       if (depth >= (int)kMaxDepth) {
-        warning_ = true;
+        Incomplete();
         continue;
       }
       // Parse each directory cluster chain once: this stops loops (an
       // ancestor's cluster) and cross-linked siblings that would otherwise
       // expand the same subtree again and again.
       if (it.firstCluster < 2 || it.firstCluster >= dirSeen_.size() || dirSeen_[it.firstCluster]) {
-        warning_ = true;
+        Incomplete();
         continue;
       }
       dirSeen_[it.firstCluster] = true;
       if (dirBytesLeft_ == 0) { // budget used up: directory chains are cross-linked
-        warning_ = true;
+        Incomplete();
         continue;
       }
       std::vector<uint8_t> dir;
-      if (!ReadChain(it.firstCluster, std::min<uint64_t>(65536u * 32, dirBytesLeft_), dir)) warning_ = true;
+      if (!ReadChain(it.firstCluster, std::min<uint64_t>(65536u * 32, dirBytesLeft_), dir)) Incomplete();
       dirBytesLeft_ -= dir.size();
       std::u16string sub = items_[idx].path + u"/";
       ParseDir(dir.data(), dir.size() / 32, idx, sub, depth + 1);
@@ -809,6 +811,13 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
       }
     }
     if (parts.empty()) continue;
+    // Image::Open descends into at most kMaxDepth nested folders and treats
+    // a deeper folder as damage, so never write one.
+    if (parts.size() - (items[i].isDir ? 0 : 1) > kMaxDepth) {
+      SetErr(err, "folders nested more than " + std::to_string(kMaxDepth) + " levels deep: " +
+                      Narrow(items[i].path));
+      return false;
+    }
     int dir = 0;
     for (size_t k = 0; k < parts.size(); k++) {
       const bool last = k + 1 == parts.size();
@@ -1083,6 +1092,17 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
     uint8_t *dst =
         img + ((size_t)g.FirstDataSector() + (size_t)(n.firstCluster - 2) * g.sectorsPerCluster) * bps;
     std::memcpy(dst, data.data(), data.size());
+  }
+
+  // Catch-all: the image must read back without warnings.  Image::Open caps
+  // the total length of all paths (and other totals) to bound memory on
+  // hostile images; a legitimate tree can exceed that cap, e.g. thousands of
+  // long names in a very deep folder.  Fail here instead of writing an image
+  // whose listing would silently stop partway.
+  Image check;
+  if (!check.Open(out, nullptr) || check.HeadersWarning()) {
+    SetErr(err, "too many files or paths too long: the image could not be read back completely");
+    return false;
   }
   return true;
 }

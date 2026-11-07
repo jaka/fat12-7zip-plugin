@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 jaka
 // fuzz_fat12.cpp - fuzz target for the FAT12 core (src/fat12.cpp).
 //
 // 7-Zip probes every file the user opens with each plugin, so IsArc(),
@@ -115,28 +117,74 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
 #include <sanitizer/common_interface_defs.h>
 
 #include <chrono>
+#include <csignal>
 #include <dirent.h>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
+#include <sys/resource.h>
+#include <unistd.h>
+
+// No single allocation may exceed 128 MiB (like libFuzzer's -malloc_limit_mb):
+// a parser that sizes a buffer from header fields fails here instead of
+// quietly allocating gigabytes.  ASAN_OPTIONS in the environment overrides it.
+extern "C" const char *__asan_default_options()
+{
+  return "max_allocation_size_mb=128:allocator_may_return_null=0";
+}
 
 namespace {
 
 std::vector<uint8_t> g_current; // input under test, saved if we crash
 const char *g_crashFile = "fuzz-crash.img";
+long g_rssLimitMb = 512;   // -rss_limit_mb=, 0 = off
+unsigned g_timeoutSec = 5; // -timeout=, per input, 0 = off
 
+// Async-signal-safe: also called from the SIGALRM handler.
 void SaveCurrent()
 {
-  if (FILE *f = std::fopen(g_crashFile, "wb")) {
-    std::fwrite(g_current.data(), 1, g_current.size(), f);
-    std::fclose(f);
-    std::fprintf(stderr, "crashing input saved to %s (%zu bytes)\n", g_crashFile, g_current.size());
+  const int fd = ::open(g_crashFile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) return;
+  const uint8_t *p = g_current.data();
+  size_t left = g_current.size();
+  while (left > 0) {
+    const ssize_t n = ::write(fd, p, left);
+    if (n <= 0) break;
+    p += n;
+    left -= (size_t)n;
   }
+  ::close(fd);
+  const char msg[] = "input saved to the -crash= file\n";
+  (void)!::write(2, msg, sizeof msg - 1);
+}
+
+void OnTimeout(int)
+{
+  const char msg[] = "\nfuzz: input exceeded -timeout (slow input, e.g. quadratic parsing)\n";
+  (void)!::write(2, msg, sizeof msg - 1);
+  SaveCurrent();
+  ::_exit(70);
+}
+
+long PeakRssMb()
+{
+  rusage ru;
+  ::getrusage(RUSAGE_SELF, &ru);
+  return ru.ru_maxrss / 1024; // Linux: KiB
 }
 
 void RunOne(const std::vector<uint8_t> &input)
 {
   g_current = input;
+  ::alarm(g_timeoutSec);
   LLVMFuzzerTestOneInput(input.data(), input.size());
+  ::alarm(0);
+  // The peak only grows, so the first input that pushes it over is the culprit.
+  if (g_rssLimitMb > 0 && PeakRssMb() > g_rssLimitMb) {
+    std::fprintf(stderr, "\nfuzz: peak RSS %ld MB exceeds -rss_limit_mb=%ld\n", PeakRssMb(), g_rssLimitMb);
+    SaveCurrent();
+    std::abort();
+  }
 }
 
 std::vector<uint8_t> ReadAll(const std::string &path)
@@ -237,8 +285,10 @@ void Mutate(std::vector<uint8_t> &d, Rng &r, uint32_t metaBytes)
 
 int Usage()
 {
-  std::cerr << "usage: fuzz_fat12 [-runs=N] [-seed=S] [-max_total_time=SEC] [-crash=FILE] [seed files/dirs...]\n"
-               "       fuzz_fat12 FILE...   (replay: run each file once)\n";
+  std::cerr << "usage: fuzz_fat12 [-runs=N] [-seed=S] [-max_total_time=SEC] [-crash=FILE]\n"
+               "                  [-rss_limit_mb=MB (512)] [-timeout=SEC per input (5)] [seed files/dirs...]\n"
+               "       fuzz_fat12 FILE...   (replay: run each file once, same limits)\n"
+               "Single allocations over 128 MiB fail (ASAN_OPTIONS=max_allocation_size_mb=N to change).\n";
   return 2;
 }
 
@@ -255,10 +305,13 @@ int main(int argc, char **argv)
     else if (a.rfind("-seed=", 0) == 0) seed = std::strtoull(a.c_str() + 6, nullptr, 0);
     else if (a.rfind("-max_total_time=", 0) == 0) maxTime = std::atol(a.c_str() + 16);
     else if (a.rfind("-crash=", 0) == 0) g_crashFile = argv[i] + 7;
+    else if (a.rfind("-rss_limit_mb=", 0) == 0) g_rssLimitMb = std::atol(a.c_str() + 14);
+    else if (a.rfind("-timeout=", 0) == 0) g_timeoutSec = (unsigned)std::atol(a.c_str() + 9);
     else if (a[0] == '-') return Usage();
     else paths.push_back(a);
   }
   __sanitizer_set_death_callback(SaveCurrent);
+  std::signal(SIGALRM, OnTimeout);
 
   std::vector<std::vector<uint8_t>> corpus;
   for (const std::string &p : paths) {
