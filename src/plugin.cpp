@@ -8,6 +8,7 @@
 #include "fat12.h"
 #include "version.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -827,6 +828,14 @@ private:
 
     std::vector<fat12::NewItem> items;
     items.reserve(numItems);
+    // Build() places files (directory entries and clusters) in the order it
+    // gets them, and 7-Zip passes them sorted by name.  Sort them back:
+    // files already in the image keep their original order (directory order,
+    // which on a DOS system disk is also cluster order), new files go last.
+    // So IO.SYS / MSDOS.SYS stay the first two entries, IO.SYS keeps cluster
+    // 2, and adding files moves nothing that was already there.
+    std::vector<uint64_t> order;
+    order.reserve(numItems);
     for (UInt32 i = 0; i < numItems; i++) {
       Int32 newData = 0, newProps = 0;
       UInt32 old = 0;
@@ -908,7 +917,18 @@ private:
         if (FAILED(hr = cb->SetOperationResult(kUpdateResult_OK))) return hr;
         if (FAILED(hr = cb->SetCompleted(&done))) return hr;
       }
+      const bool inImage = opened_ && old < img_.Items().size();
+      order.push_back(inImage ? old : ((uint64_t)1 << 32) + i);
       items.push_back(std::move(it));
+    }
+    {
+      std::vector<size_t> perm(items.size());
+      for (size_t k = 0; k < perm.size(); k++) perm[k] = k;
+      std::stable_sort(perm.begin(), perm.end(), [&](size_t x, size_t y) { return order[x] < order[y]; });
+      std::vector<fat12::NewItem> sorted;
+      sorted.reserve(items.size());
+      for (size_t k : perm) sorted.push_back(std::move(items[k]));
+      items.swap(sorted);
     }
 
     std::vector<uint8_t> image;
@@ -969,7 +989,7 @@ PLUGIN_EXPORT HRESULT WINAPI GetHandlerProperty2(UInt32 index, PROPID id, PROPVA
     case NHandlerPropID::kClassID:
       return PropBin(v, &CLSID_FAT12, sizeof(GUID));
     case NHandlerPropID::kExtension:
-      return PropStr(v, L"ima img vfd flp"); // first one: default for new archives
+      return PropStr(v, L"ima img vfd flp f12"); // first one: default for new archives
     case NHandlerPropID::kUpdate:
       PropBool(v, true);
       break;

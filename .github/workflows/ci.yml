@@ -44,7 +44,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             ca-certificates curl git xz-utils make g++ python3 dosfstools 7zip
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Fetch 7-Zip source
         run: |
           curl -fsSL -o /tmp/7zsrc.tar.xz "$SEVENZIP_SRC_URL"
@@ -55,7 +55,7 @@ jobs:
         run: make test SRC7Z=/opt/7zsrc/CPP
       - name: Keep test output
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-output
           path: |
@@ -76,14 +76,14 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates git make clang libclang-rt-dev
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Fuzz
         # Replays tests/fuzz_regress first.  Limits per input: 5 s, 512 MB RSS,
         # 128 MB per allocation (see Makefile).
         run: make fuzz FUZZ_RUNS=30000 FUZZ_SEED=${{ github.run_number }}
       - name: Keep failing input
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-failure
           path: |
@@ -103,13 +103,18 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates git make g++ g++-mingw-w64-i686 g++-mingw-w64-x86-64 binutils-mingw-w64 nsis
-      - uses: actions/checkout@v4
+            ca-certificates git make g++ g++-mingw-w64-i686 g++-mingw-w64-x86-64 binutils-mingw-w64 nsis \
+            clang-format
+      - uses: actions/checkout@v7
+      - name: Format check (clang-format, .clang-format)
+        run: |
+          clang-format --version
+          make format-check
       - name: Lint (GCC and MinGW warnings as errors)
         run: make lint
       - name: Build DLLs and installer
         run: make installer
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: fat12-windows
           path: dist/
@@ -127,7 +132,7 @@ jobs:
     permissions:
       contents: write # create the release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check the tag against src/version.h
         run: |
           ver=$(sed -n 's/^#define FAT12_VER_STR "\(.*\)"$/\1/p' src/version.h)
@@ -135,7 +140,7 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match version $ver in src/version.h"
             exit 1
           fi
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: fat12-windows
           path: dist

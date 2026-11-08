@@ -46,11 +46,12 @@ VIAddVersionKey LegalCopyright "Copyright (C) 2026 jaka. GNU GPL v2 or later."
 
 Var Dir64     ; 64-bit 7-Zip folder
 Var Dir32     ; 32-bit 7-Zip folder
+Var InUseChecked
 
 ; ---------------------------------------------------------------- pages ----
 
 !define MUI_ABORTWARNING
-!define MUI_WELCOMEPAGE_TEXT "This will install the FAT12 floppy image plugin (fat12.dll) into 7-Zip.$\r$\n$\r$\n7-Zip will then be able to create and update .img, .ima, .vfd and .flp floppy images.$\r$\n$\r$\nClose 7-Zip before continuing."
+!define MUI_WELCOMEPAGE_TEXT "This will install the FAT12 floppy image plugin (fat12.dll) into 7-Zip.$\r$\n$\r$\n7-Zip will then be able to create and update .img, .ima, .vfd, .flp and .f12 floppy images.$\r$\n$\r$\nClose 7-Zip before continuing."
 !insertmacro MUI_PAGE_WELCOME
 
 ; GPL: show the license, but do not ask the user to accept it (using the
@@ -204,48 +205,107 @@ Function Detect7Zip
 FunctionEnd
 
 ; Check a 7-Zip folder against the expected machine; Abort keeps the page open.
+; Silent mode (/SD): never install into a folder without a matching 7-Zip.
 !macro CheckDir DIR MACHINE BITS
   StrCpy $R0 ${DIR}
   Call Get7zMachine
   ${If} $R1 = 0
-    MessageBox MB_YESNO|MB_ICONEXCLAMATION "No 7-Zip was found in$\r$\n${DIR}$\r$\n$\r$\nInstall the ${BITS}-bit plugin there anyway?" IDYES +2
+    MessageBox MB_YESNO|MB_ICONEXCLAMATION "No 7-Zip was found in$\r$\n${DIR}$\r$\n$\r$\nInstall the ${BITS}-bit plugin there anyway?" /SD IDNO IDYES +2
     Abort
   ${ElseIf} $R1 <> ${MACHINE}
-    MessageBox MB_OK|MB_ICONSTOP "The 7-Zip in$\r$\n${DIR}$\r$\nis not ${BITS}-bit. 7-Zip can only load a plugin of its own bitness."
+    MessageBox MB_OK|MB_ICONSTOP "The 7-Zip in$\r$\n${DIR}$\r$\nis not ${BITS}-bit. 7-Zip can only load a plugin of its own bitness." /SD IDOK
     Abort
   ${EndIf}
 !macroend
 
-; Copy fat12.dll into <7-Zip>\Formats.  A DLL that a running 7-Zip has loaded
-; can't be overwritten, but it can be renamed; move it out of Formats (7-Zip
-; tries to load every file there) and delete it at the next reboot.
-!macro InstallDll ARCH DIR
-  DetailPrint "Installing ${ARCH} plugin into ${DIR}\Formats"
-  CreateDirectory "${DIR}\Formats"
+; Remove <7-Zip>\Formats\fat12.dll now.  A DLL that a running 7-Zip has
+; loaded can't be deleted, but it can be renamed: move it out of Formats (7-Zip
+; tries to load every file there) and delete the renamed copy at the next
+; reboot.  Never schedule Formats\fat12.dll itself for deletion at reboot: a
+; new copy may be written to that path before the reboot.
+; Is the plugin in <7-Zip>\Formats loaded by a running 7-Zip?  Windows refuses
+; write access to a loaded DLL, so opening it for append (which changes
+; nothing) fails exactly then.  The user can close 7-Zip and retry, go on
+; anyway (MoveOutDll then moves the loaded copy aside), or cancel.  Silent
+; mode goes on.  Defined for setup and for the uninstaller (un. prefix).
+!macro DefineCheckInUse UN IGNORE_TEXT
+Function ${UN}CheckInUse  ; in: $R0 = 7-Zip folder
+  ${IfNot} ${FileExists} "$R0\Formats\fat12.dll"
+    Return                ; "a" would create the file
+  ${EndIf}
+  retry:
+  ClearErrors
+  FileOpen $R1 "$R0\Formats\fat12.dll" a
+  ${IfNot} ${Errors}
+    FileClose $R1
+    Return
+  ${EndIf}
+  MessageBox MB_ABORTRETRYIGNORE|MB_ICONEXCLAMATION \
+    "The plugin in$\r$\n$R0\Formats$\r$\nis in use by 7-Zip.$\r$\n$\r$\nClose all 7-Zip windows and click Retry.$\r$\n${IGNORE_TEXT}" \
+    /SD IDIGNORE IDRETRY retry IDIGNORE done
+  Abort "Cancelled: the plugin is in use by 7-Zip."
+  done:
+FunctionEnd
+!macroend
+!insertmacro DefineCheckInUse "" "Ignore installs anyway (restart 7-Zip to load the new version); Abort cancels setup."
+!insertmacro DefineCheckInUse "un." "Ignore removes it anyway (restart 7-Zip to unload it); Abort cancels the uninstall."
+
+!macro MoveOutDll DIR
   Delete "${DIR}\Formats\fat12.dll"
   ${If} ${FileExists} "${DIR}\Formats\fat12.dll"
     Delete "${DIR}\fat12.dll.old"
     Rename "${DIR}\Formats\fat12.dll" "${DIR}\fat12.dll.old"
     Delete /REBOOTOK "${DIR}\fat12.dll.old"
+    ; No restart needed: 7-Zip never loads fat12.dll.old (outside Formats),
+    ; so the new plugin works once 7-Zip is restarted.  The leftover goes at
+    ; the next restart, whenever that is, or with the next setup / uninstall.
+    SetRebootFlag false
+    DetailPrint "7-Zip is using the old plugin: restart 7-Zip."
   ${EndIf}
+!macroend
+
+; Copy fat12.dll into <7-Zip>\Formats.
+!macro InstallDll ARCH DIR
+  DetailPrint "Installing ${ARCH} plugin into ${DIR}\Formats"
+  CreateDirectory "${DIR}\Formats"
+  !insertmacro MoveOutDll "${DIR}"
   SetOutPath "${DIR}\Formats"
   File "/oname=fat12.dll" "${DIST}/${ARCH}/fat12.dll"
+!macroend
+
+; A reinstall into a different 7-Zip folder: remove the copy from the folder
+; recorded last time, or it would stay behind (uninstall knows only one
+; folder per bitness).  Runs before installing; if both name the same folder
+; spelled differently (case, trailing backslash), MoveOutDll is harmless and
+; the new copy is installed right after.
+!macro RemovePrevious VALUE DIR
+  ReadRegStr $R0 HKLM "${UNINSTKEY}" "${VALUE}"
+  ${If} $R0 != ""
+  ${AndIf} $R0 != ${DIR}
+    DetailPrint "Removing the plugin from the previous folder $R0\Formats"
+    !insertmacro MoveOutDll $R0
+    RMDir "$R0\Formats"    ; only if empty
+  ${EndIf}
 !macroend
 
 ; ------------------------------------------------------------- sections ----
 
 Section "Plugin for 64-bit 7-Zip" SecX64
+  Call CheckAllInUse
   ${If} ${Silent}
     !insertmacro CheckDir $Dir64 ${MACHINE_X64} 64
   ${EndIf}
+  !insertmacro RemovePrevious Dir64 $Dir64
   !insertmacro InstallDll x64 $Dir64
   WriteRegStr HKLM "${UNINSTKEY}" "Dir64" $Dir64
 SectionEnd
 
 Section "Plugin for 32-bit 7-Zip" SecX86
+  Call CheckAllInUse
   ${If} ${Silent}
     !insertmacro CheckDir $Dir32 ${MACHINE_X86} 32
   ${EndIf}
+  !insertmacro RemovePrevious Dir32 $Dir32
   !insertmacro InstallDll x86 $Dir32
   WriteRegStr HKLM "${UNINSTKEY}" "Dir32" $Dir32
 SectionEnd
@@ -307,6 +367,23 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 
+; Called first thing by each plugin section; checks every selected folder
+; once, before anything is installed, so Abort never leaves a half-done install.
+Function CheckAllInUse
+  ${If} $InUseChecked == "1"
+    Return
+  ${EndIf}
+  StrCpy $InUseChecked "1"
+  ${If} ${SectionIsSelected} ${SecX64}
+    StrCpy $R0 $Dir64
+    Call CheckInUse
+  ${EndIf}
+  ${If} ${SectionIsSelected} ${SecX86}
+    StrCpy $R0 $Dir32
+    Call CheckInUse
+  ${EndIf}
+FunctionEnd
+
 Function ComponentsLeave
   ${IfNot} ${SectionIsSelected} ${SecX64}
   ${AndIfNot} ${SectionIsSelected} ${SecX86}
@@ -337,17 +414,27 @@ FunctionEnd
 
 ; ------------------------------------------------------------ uninstall ----
 
+!macro CheckInUse VALUE
+  ReadRegStr $R0 HKLM "${UNINSTKEY}" "${VALUE}"
+  ${If} $R0 != ""
+    Call un.CheckInUse
+  ${EndIf}
+!macroend
+
 !macro UninstallDll VALUE
   ReadRegStr $R0 HKLM "${UNINSTKEY}" "${VALUE}"
   ${If} $R0 != ""
     DetailPrint "Removing $R0\Formats\fat12.dll"
-    Delete /REBOOTOK "$R0\Formats\fat12.dll"
-    Delete /REBOOTOK "$R0\fat12.dll.old"
+    !insertmacro MoveOutDll $R0   ; a reinstall before the next reboot stays intact
+    Delete /REBOOTOK "$R0\fat12.dll.old"   ; left by an earlier update; only ever a leftover
+    SetRebootFlag false                     ; ... so no restart prompt for it
     RMDir "$R0\Formats"    ; only if empty
   ${EndIf}
 !macroend
 
 Section "Uninstall"
+  !insertmacro CheckInUse Dir64
+  !insertmacro CheckInUse Dir32
   !insertmacro UninstallDll Dir64
   !insertmacro UninstallDll Dir32
   DeleteRegKey HKLM "${UNINSTKEY}"

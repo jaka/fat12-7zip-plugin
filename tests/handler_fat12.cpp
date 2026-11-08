@@ -470,6 +470,83 @@ void TestRefusedUpdates()
   Check(hr != S_OK && img.empty(), "update of an incompletely listed image is refused");
 }
 
+// Root directory order and first clusters of an image, e.g. "IO.SYS@2".
+std::vector<std::string> Layout(const std::vector<uint8_t> &img)
+{
+  std::vector<std::string> v;
+  fat12::Image im;
+  if (!im.Open(img)) return v;
+  for (const fat12::Entry &e : im.Items())
+    if (e.parent < 0) v.push_back(Narrow(e.path) + "@" + std::to_string(e.firstCluster));
+  return v;
+}
+
+std::string Join(const std::vector<std::string> &v)
+{
+  std::string s;
+  for (const std::string &x : v) s += (s.empty() ? "" : " ") + x;
+  return s;
+}
+
+// A DOS system disk as SYS writes it: IO.SYS first in the root directory
+// and at cluster 2, MSDOS.SYS second.  Updates must keep files that are
+// already on the disk where they are (7-Zip passes items sorted by name).
+void TestKeepsPositions()
+{
+  std::printf("updates keep existing files in place (DOS system disk)\n");
+  fat12::BuildOptions o;
+  fat12::GeometryForSizeKB(1440, o.geo);
+  o.nowTicks = fat12::DosToTicks(0x5021, 0);
+  std::vector<fat12::NewItem> sys(3);
+  const char *names[3] = {"IO.SYS", "MSDOS.SYS", "COMMAND.COM"};
+  const size_t sizes[3] = {40000, 38000, 54000};
+  for (int i = 0; i < 3; i++) {
+    sys[i].path = std::u16string(names[i], names[i] + std::strlen(names[i]));
+    sys[i].data.assign(sizes[i], (uint8_t)('a' + i));
+    sys[i].attr = i < 2 ? 0x07 : 0x20; // IO.SYS, MSDOS.SYS: read-only, hidden, system
+  }
+  std::vector<uint8_t> img;
+  std::string err;
+  if (!fat12::Build(o, sys, img, &err)) return Check(false, "build system disk: " + err);
+  const std::string before = Join(Layout(img));
+  Check(before == "IO.SYS@2 MSDOS.SYS@81 COMMAND.COM@156", "system disk: " + before);
+
+  CMyComPtr<IInArchive> arc;
+  if (g_createObject(&g_clsid, &IID_IInArchive, (void **)&arc) != S_OK || !arc) return Check(false, "CreateObject");
+
+  // Add files that sort before and after the system files.
+  Check(Reopen(arc, img) == S_OK, "open system disk");
+  std::vector<std::string> paths = ListPaths(arc);
+  std::vector<Op> ops;
+  ops.push_back(AddFile("AUTOEXEC.BAT", "@echo off"));
+  for (UInt32 i = 0; i < paths.size(); i++) ops.push_back(Keep(i));
+  ops.push_back(AddFile("ZZZ.TXT", "z"));
+  HRESULT hr = FmUpdate(arc, ops, img);
+  std::string got = Join(Layout(img));
+  Check(hr == S_OK && got == "IO.SYS@2 MSDOS.SYS@81 COMMAND.COM@156 AUTOEXEC.BAT@262 ZZZ.TXT@263",
+        "add: existing files keep entry and cluster, new ones go last: " + got);
+
+  // Rename COMMAND.COM (sorts differently now): stays in its place.
+  Check(Reopen(arc, img) == S_OK, "reopen after add");
+  paths = ListPaths(arc);
+  ops.clear();
+  for (UInt32 i = 0; i < paths.size(); i++)
+    ops.push_back(paths[i] == "COMMAND.COM" ? Rename(i, "A.COM") : Keep(i));
+  hr = FmUpdate(arc, ops, img);
+  got = Join(Layout(img));
+  Check(hr == S_OK && got == "IO.SYS@2 MSDOS.SYS@81 A.COM@156 AUTOEXEC.BAT@262 ZZZ.TXT@263", "rename: " + got);
+
+  // Delete a file after the system files: they do not move.
+  Check(Reopen(arc, img) == S_OK, "reopen after rename");
+  paths = ListPaths(arc);
+  ops.clear();
+  for (UInt32 i = 0; i < paths.size(); i++)
+    if (paths[i] != "A.COM") ops.push_back(Keep(i));
+  hr = FmUpdate(arc, ops, img);
+  got = Join(Layout(img));
+  Check(hr == S_OK && got == "IO.SYS@2 MSDOS.SYS@81 AUTOEXEC.BAT@156 ZZZ.TXT@157", "delete: " + got);
+}
+
 void TestCreateNew()
 {
   std::printf("new image (Add to archive dialog)\n");
@@ -515,6 +592,7 @@ int main(int argc, char **argv)
   }
   TestFileManagerUpdates();
   TestRefusedUpdates();
+  TestKeepsPositions();
   TestCreateNew();
   std::printf(g_failures ? "SOME HANDLER TESTS FAILED\n" : "ALL HANDLER TESTS PASSED\n");
   return g_failures ? 1 : 0;

@@ -25,9 +25,11 @@ these images.
 ## Install
 
 **With the installer** (Windows 2000 or later): run
-`fat12-7zip-plugin-<version>-setup.exe`. It finds every installed 7-Zip,
-checks whether each one is 32-bit or 64-bit, and copies the matching DLL into
-its `Formats` folder. If 7-Zip isn't found, it asks for the folder. Uninstall
+`fat12-7zip-plugin-<version>-setup.exe`. It looks for 7-Zip in the registry
+and in Program Files, checks whether it is 32-bit or 64-bit, and copies the
+matching DLL into its `Formats` folder: into one 64-bit and one 32-bit 7-Zip
+at most. For any further copy of 7-Zip, install by hand (below). If 7-Zip
+isn't found, it asks for the folder. Uninstall
 it from Add/Remove Programs. Silent: `setup.exe /S` (exit code 2 if no 7-Zip
 was found), `uninstall.exe /S`. Build it with `make installer` (needs NSIS 3).
 
@@ -38,7 +40,7 @@ was found), `uninstall.exe /S`. Build it with `make installer` (needs NSIS 3).
 2. Create a `Formats` folder next to `7z.exe`, for example
    `C:\Program Files\7-Zip\Formats\`, and copy `fat12.dll` into it.
 3. Check with `7z i`. The format list should include
-   `f12  ima img vfd flp` with `C` (can create) in the flags column.
+   `f12  ima img vfd flp f12` with `C` (can create) in the flags column.
 
 ## Usage
 
@@ -100,12 +102,12 @@ The command-line `7z.exe` never shows a dialog. Without `-msize` it creates
 | `size` | `1.44m`, `1,44`, `1.44`, `1.2m`, `720k`, `720`, `360k`, `2.88`, `dmf`, `ask`, … (floppy "MB" = 1000 KiB, so 1.44 → 1440 KiB) |
 | `label` | up to 11 ASCII characters, upper-cased; not allowed: `" * + , . / : ; < = > ? [ \ ] \|`; `-mlabel=` removes the label |
 
-### `.img` vs `.ima` / `.vfd` / `.flp`
+### `.img` vs `.ima` / `.vfd` / `.flp` / `.f12`
 
 7-Zip's built-in `FAT` handler also claims `.img`, and built-in formats are
 tried before plugins. As a result:
 
-- `.ima`, `.vfd` and `.flp` files open with this plugin automatically, so
+- `.ima`, `.vfd`, `.flp` and `.f12` files open with this plugin automatically, so
   adding and deleting files works in the File Manager.
 - `.img` files open with the built-in read-only handler. On the command line,
   add `-tf12` to update them (`7z a -tf12 disk.img file`). In the GUI,
@@ -114,9 +116,12 @@ tried before plugins. As a result:
 ## Notes
 
 - Updating an image rewrites it completely, with files stored contiguously.
-  The original boot sector (boot code, OEM name, serial) is kept. However,
-  bootable DOS system disks may stop booting, because their boot code expects
-  `IO.SYS` in the first data cluster.
+  The original boot sector (boot code, OEM name, serial) is kept. Files that
+  are already on the image keep their order, so on a DOS system disk `IO.SYS`
+  and `MSDOS.SYS` stay the first two directory entries and `IO.SYS` stays in
+  the first data cluster. New files are added after the existing ones, and
+  adding files never moves existing ones; deleting or enlarging a file moves
+  the files after it.
 - FAT stores local time with 2-second precision. Times are converted with the
   current Windows time zone.
 - Short names use ASCII. Names with other characters get an LFN plus a
