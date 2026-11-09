@@ -115,5 +115,18 @@ rm -rf "$W/inc/x"; "$Z" x -o"$W/inc/x" "$W/inc/i.ima" > /dev/null 2>&1; cmp -s "
 "$Z" a "$W/inc/t.ima" "$W/extra.txt" > "$W/inc.log" 2>&1 && [ "$(stat -c %s "$W/inc/t.ima")" = 1474560 ] && fsck.fat -n "$W/inc/t.ima" > /dev/null 2>&1 \
   && ok "truncated image can still be updated (restored to full size)" || { bad "truncated image update"; cat "$W/inc.log"; }
 
+# --- options: lfn=off (8.3 names only) and boot=<file> (boot code from a file or image)
+mkdir -p "$W/opt"; echo x > "$W/opt/A Long Name.txt"
+( cd "$W/opt" && "$Z" a -tf12 -msize=720k -mlfn=off ../lfn.ima "A Long Name.txt" > /dev/null 2>&1 )
+"$Z" l "$W/lfn.ima" 2>/dev/null | grep -q " ALONGN~1.TXT$" && fsck.fat -n "$W/lfn.ima" > /dev/null 2>&1 \
+  && ok "lfn=off writes 8.3 names" || bad "lfn=off"
+mkfs.fat -C "$W/bootsrc.ima" 1440 > /dev/null 2>&1
+"$Z" a -tf12 -msize=720k "-mboot=$W/bootsrc.ima" "$W/boot.ima" "$W/extra.txt" > /dev/null 2>&1
+[ "$(head -c 510 "$W/bootsrc.ima" | tail -c +63 | md5sum)" = "$(head -c 510 "$W/boot.ima" | tail -c +63 | md5sum)" ] \
+  && fsck.fat -n "$W/boot.ima" > /dev/null 2>&1 && ok "boot= copies the boot code" || bad "boot="
+"$Z" a -tf12 "-mboot=$W/extra.txt" "$W/badboot.ima" "$W/extra.txt" > "$W/boot.log" 2>&1
+grep -q "boot sector file is shorter than 512 bytes" "$W/boot.log" && [ ! -e "$W/badboot.ima" ] \
+  && ok "bad boot file rejected" || { bad "bad boot file"; cat "$W/boot.log"; }
+
 [ $fail = 0 ] && echo "ALL PLUGIN TESTS PASSED" || echo "SOME PLUGIN TESTS FAILED"
 exit $fail

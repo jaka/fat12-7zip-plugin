@@ -867,6 +867,10 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
         else {
           s = MakeShortNameIn(c.name, st, &lfn, &cf);
         }
+        if (!opt.lfn) { // DOS only: the short name is the name, upper-cased
+          lfn = false;
+          cf = 0;
+        }
         c.short11 = s;
         c.needLfn = lfn;
         c.caseFlags = cf;
@@ -914,8 +918,16 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
 
   // Boot sector
   uint8_t *bs = img;
+  // Boot code starts at the jump target.  Fields past it are left alone in a
+  // copied boot sector: DOS 3.x boot sectors have no extended BPB (offsets
+  // 36-61) and keep code there (MS-DOS 3.3 jumps to 0x36).
+  size_t codeStart = 512;
   if (opt.bootSector && opt.bootSector->size() >= 512 && (*opt.bootSector)[0] != 0) {
     std::memcpy(bs, opt.bootSector->data(), 512);
+    if (bs[0] == 0xEB)
+      codeStart = 2u + bs[1];
+    else if (bs[0] == 0xE9)
+      codeStart = std::min<size_t>(512, 3u + Get16(bs + 1));
   }
   else {
     static const uint8_t kJump[3] = {0xEB, 0x3C, 0x90};
@@ -945,14 +957,16 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
   Set16(bs + 22, g.sectorsPerFat);
   Set16(bs + 24, g.sectorsPerTrack);
   Set16(bs + 26, g.numHeads);
-  Set32(bs + 28, g.hiddenSectors);
-  Set32(bs + 32, g.totalSectors < 65536 ? 0 : g.totalSectors);
-  bs[36] = 0x00; // drive number (floppy)
-  bs[37] = 0;
-  bs[38] = 0x29; // extended boot signature
-  Set32(bs + 39, opt.serial ? opt.serial : (uint32_t)(opt.nowTicks / kTicksPerSec * 2654435761u));
-  LabelBytes(opt.label.empty() ? u"NO NAME" : opt.label, bs + 43);
-  std::memcpy(bs + 54, "FAT12   ", 8);
+  if (codeStart >= 32) Set32(bs + 28, g.hiddenSectors);
+  if (codeStart >= 36) Set32(bs + 32, g.totalSectors < 65536 ? 0 : g.totalSectors);
+  if (codeStart >= 62) { // extended BPB (DOS 4.0+)
+    bs[36] = 0x00;       // drive number (floppy)
+    bs[37] = 0;
+    bs[38] = 0x29; // extended boot signature
+    Set32(bs + 39, opt.serial ? opt.serial : (uint32_t)(opt.nowTicks / kTicksPerSec * 2654435761u));
+    LabelBytes(opt.label.empty() ? u"NO NAME" : opt.label, bs + 43);
+    std::memcpy(bs + 54, "FAT12   ", 8);
+  }
   bs[510] = 0x55;
   bs[511] = 0xAA;
 
@@ -1025,13 +1039,6 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
     else
       buf.assign((size_t)d.numClusters * cb, 0);
     size_t pos = 0;
-    if (di == 0 && !opt.label.empty()) {
-      uint8_t name[11];
-      LabelBytes(opt.label, name);
-      if (name[0] == 0xE5) name[0] = 0x05; // 0xE5 would mark the entry as deleted
-      writeShort(&buf[pos], name, kAttrVolume, 0, d, 0, 0);
-      pos += 32;
-    }
     if (di != 0) {
       uint8_t dot[11], dotdot[11];
       std::memset(dot, ' ', 11);
@@ -1076,6 +1083,15 @@ bool Build(const BuildOptions &opt, const std::vector<NewItem> &items, std::vect
       }
       if (c.isDir) attr |= kAttrDir;
       writeShort(&buf[pos], name11, attr, c.caseFlags, c, c.firstCluster, size);
+      pos += 32;
+    }
+    // The label goes after the files: the MS-DOS boot sector needs IO.SYS and
+    // MSDOS.SYS in root entries 0 and 1 (FORMAT /S /V puts it there too).
+    if (di == 0 && !opt.label.empty()) {
+      uint8_t name[11];
+      LabelBytes(opt.label, name);
+      if (name[0] == 0xE5) name[0] = 0x05; // 0xE5 would mark the entry as deleted
+      writeShort(&buf[pos], name, kAttrVolume, 0, d, 0, 0);
       pos += 32;
     }
     uint8_t *dst =

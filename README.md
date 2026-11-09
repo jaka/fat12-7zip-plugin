@@ -1,6 +1,6 @@
 # FAT12 floppy image plugin for 7-Zip
 
-[![CI](https://github.com/jaka/7zip-f12/actions/workflows/ci.yml/badge.svg)](https://github.com/jaka/7zip-f12/actions/workflows/ci.yml)
+[![CI](https://github.com/jaka/fat12-7zip-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/jaka/fat12-7zip-plugin/actions/workflows/ci.yml)
 
 A 7-Zip format plugin (`fat12.dll`) that **lists, extracts, tests, creates and
 updates** FAT12 floppy disk images. 7-Zip's built-in `FAT` handler can only read
@@ -35,10 +35,13 @@ was found), `uninstall.exe /S`. Build it with `make installer` (needs NSIS 3).
 
 **By hand**:
 
-1. Build `fat12.dll` (see below). It must match 7-Zip's bitness: x64 DLL for
-   64-bit 7-Zip, x86 DLL for 32-bit 7-Zip.
+1. Download `fat12-x64.dll` (64-bit 7-Zip) or `fat12-x86.dll` (32-bit 7-Zip)
+   from the [Releases](https://github.com/jaka/fat12-7zip-plugin/releases) page, or
+   build `fat12.dll` (see below). It must match 7-Zip's bitness.
 2. Create a `Formats` folder next to `7z.exe`, for example
-   `C:\Program Files\7-Zip\Formats\`, and copy `fat12.dll` into it.
+   `C:\Program Files\7-Zip\Formats\`, and copy the DLL into it as
+   `fat12.dll`. (7-Zip loads any file name, but the installer and uninstaller
+   only know `fat12.dll`.)
 3. Check with `7z i`. The format list should include
    `f12  ima img vfd flp f12` with `C` (can create) in the flags column.
 
@@ -60,7 +63,7 @@ the plugin asks which floppy size to create:
 ```
 
 To skip the question, type the size into the **Parameters** box, for example
-`size=1.2m` or `size=720k label=GAMES`.
+`size=1.2m` or `size=720k label=GAMES`. The other options below work there too.
 
 New images get the `.ima` extension. The dialog's *Compression level*,
 *CPU threads* and memory settings have no effect: floppy images are not
@@ -101,6 +104,8 @@ The command-line `7z.exe` never shows a dialog. Without `-msize` it creates
 |---|---|
 | `size` | `1.44m`, `1,44`, `1.44`, `1.2m`, `720k`, `720`, `360k`, `2.88`, `dmf`, `ask`, … (floppy "MB" = 1000 KiB, so 1.44 → 1440 KiB) |
 | `label` | up to 11 ASCII characters, upper-cased; not allowed: `" * + , . / : ; < = > ? [ \ ] \|`; `-mlabel=` removes the label |
+| `boot` | file whose first sector becomes the boot sector: a boot sector file or a bootable floppy image, e.g. `-mboot=C:\dos\boot.img`; use a full path |
+| `lfn` | `off`: no long file names, only uppercase 8.3 names (`A Long Name.txt` → `ALONGN~1.TXT`), for very old tools; default `on` |
 
 ### `.img` vs `.ima` / `.vfd` / `.flp` / `.f12`
 
@@ -112,6 +117,21 @@ tried before plugins. As a result:
 - `.img` files open with the built-in read-only handler. On the command line,
   add `-tf12` to update them (`7z a -tf12 disk.img file`). In the GUI,
   either rename the file to `.ima` or create it fresh with *Add to archive*.
+
+### Bootable DOS disks
+
+Take the boot sector from an existing DOS boot floppy, then add the system
+files first, in this order:
+
+```bat
+7z a -tf12 -msize=1.44m -mboot=C:\dos\boot.img disk.ima IO.SYS
+7z a disk.ima MSDOS.SYS
+7z a disk.ima COMMAND.COM AUTOEXEC.BAT
+```
+
+Files already on an image keep their place, so `IO.SYS` stays first and in
+cluster 2, and `MSDOS.SYS` second. Only the disk geometry is written into the
+boot sector; its boot code is kept, including DOS 3.x boot code.
 
 ## Notes
 
@@ -161,7 +181,8 @@ make                      # -> dist/x86/fat12.dll, dist/x64/fat12.dll
 ### Publishing a release
 
 CI (`.github/workflows/ci.yml`) builds and tests every push. To publish a
-GitHub Release with the installer, a zip of both DLLs and their SHA-256 sums,
+GitHub Release with the installer, both DLLs (`fat12-x64.dll`,
+`fat12-x86.dll`) and their SHA-256 sums,
 set the version in `src/version.h`, commit, then push a matching tag:
 
 ```sh
@@ -273,7 +294,7 @@ input to `build/fuzz-crash.img`. After fixing the bug, add the input to
 
 Copyright (C) 2026 jaka
 
-Source code: <https://github.com/jaka/7zip-f12>
+Source code: <https://github.com/jaka/fat12-7zip-plugin>
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by the Free

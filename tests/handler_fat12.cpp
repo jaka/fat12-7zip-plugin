@@ -136,6 +136,17 @@ Op Rename(UInt32 old, const std::string &path)
   o.path = path;
   return o;
 }
+// Edit in the File Manager: new data, same index and name (7-Zip's
+// CAgent::UpdateOneFile).
+Op Edit(UInt32 old, const std::string &path, const std::string &data)
+{
+  Op o;
+  o.newData = o.newProps = true;
+  o.oldIndex = old;
+  o.path = path;
+  o.data = data;
+  return o;
+}
 Op AddFile(const std::string &path, const std::string &data)
 {
   Op o;
@@ -481,6 +492,17 @@ std::vector<std::string> Layout(const std::vector<uint8_t> &img)
   return v;
 }
 
+// The first two raw root directory entries, as the MS-DOS boot sector
+// checks them ("IO      SYS MSDOS   SYS").
+std::string FirstRootEntries(const std::vector<uint8_t> &img)
+{
+  if (img.size() < 512) return "";
+  const size_t bps = img[11] | (img[12] << 8);
+  const size_t root = (size_t)((img[14] | (img[15] << 8)) + img[16] * (img[22] | (img[23] << 8))) * bps;
+  if (root + 64 > img.size()) return "";
+  return std::string((const char *)&img[root], 11) + " " + std::string((const char *)&img[root + 32], 11);
+}
+
 std::string Join(const std::vector<std::string> &v)
 {
   std::string s;
@@ -497,6 +519,7 @@ void TestKeepsPositions()
   fat12::BuildOptions o;
   fat12::GeometryForSizeKB(1440, o.geo);
   o.nowTicks = fat12::DosToTicks(0x5021, 0);
+  o.label = u"BOOTDISK"; // must not take root entry 0 or 1
   std::vector<fat12::NewItem> sys(3);
   const char *names[3] = {"IO.SYS", "MSDOS.SYS", "COMMAND.COM"};
   const size_t sizes[3] = {40000, 38000, 54000};
@@ -510,6 +533,8 @@ void TestKeepsPositions()
   if (!fat12::Build(o, sys, img, &err)) return Check(false, "build system disk: " + err);
   const std::string before = Join(Layout(img));
   Check(before == "IO.SYS@2 MSDOS.SYS@81 COMMAND.COM@156", "system disk: " + before);
+  const std::string sysEntries = "IO      SYS MSDOS   SYS";
+  Check(FirstRootEntries(img) == sysEntries, "system disk: root entries 0, 1: " + FirstRootEntries(img));
 
   CMyComPtr<IInArchive> arc;
   if (g_createObject(&g_clsid, &IID_IInArchive, (void **)&arc) != S_OK || !arc) return Check(false, "CreateObject");
@@ -525,6 +550,22 @@ void TestKeepsPositions()
   std::string got = Join(Layout(img));
   Check(hr == S_OK && got == "IO.SYS@2 MSDOS.SYS@81 COMMAND.COM@156 AUTOEXEC.BAT@262 ZZZ.TXT@263",
         "add: existing files keep entry and cluster, new ones go last: " + got);
+  Check(FirstRootEntries(img) == sysEntries, "add: root entries 0, 1: " + FirstRootEntries(img));
+
+  // Edit AUTOEXEC.BAT in the File Manager (it grows by a cluster).
+  Check(Reopen(arc, img) == S_OK, "reopen before edit");
+  paths = ListPaths(arc);
+  ops.clear();
+  for (UInt32 i = 0; i < paths.size(); i++)
+    ops.push_back(paths[i] == "AUTOEXEC.BAT" ? Edit(i, paths[i], std::string(600, 'x')) : Keep(i));
+  hr = FmUpdate(arc, ops, img);
+  got = Join(Layout(img));
+  Check(hr == S_OK && got == "IO.SYS@2 MSDOS.SYS@81 COMMAND.COM@156 AUTOEXEC.BAT@262 ZZZ.TXT@264", "edit: " + got);
+  Check(FirstRootEntries(img) == sysEntries, "edit: root entries 0, 1: " + FirstRootEntries(img));
+  {
+    fat12::Image im;
+    Check(im.Open(img) && im.VolumeLabel() == u"BOOTDISK", "edit: label kept");
+  }
 
   // Rename COMMAND.COM (sorts differently now): stays in its place.
   Check(Reopen(arc, img) == S_OK, "reopen after add");
@@ -534,7 +575,8 @@ void TestKeepsPositions()
     ops.push_back(paths[i] == "COMMAND.COM" ? Rename(i, "A.COM") : Keep(i));
   hr = FmUpdate(arc, ops, img);
   got = Join(Layout(img));
-  Check(hr == S_OK && got == "IO.SYS@2 MSDOS.SYS@81 A.COM@156 AUTOEXEC.BAT@262 ZZZ.TXT@263", "rename: " + got);
+  Check(hr == S_OK && got == "IO.SYS@2 MSDOS.SYS@81 A.COM@156 AUTOEXEC.BAT@262 ZZZ.TXT@264", "rename: " + got);
+  Check(FirstRootEntries(img) == sysEntries, "rename: root entries 0, 1: " + FirstRootEntries(img));
 
   // Delete a file after the system files: they do not move.
   Check(Reopen(arc, img) == S_OK, "reopen after rename");
@@ -544,7 +586,8 @@ void TestKeepsPositions()
     if (paths[i] != "A.COM") ops.push_back(Keep(i));
   hr = FmUpdate(arc, ops, img);
   got = Join(Layout(img));
-  Check(hr == S_OK && got == "IO.SYS@2 MSDOS.SYS@81 AUTOEXEC.BAT@156 ZZZ.TXT@157", "delete: " + got);
+  Check(hr == S_OK && got == "IO.SYS@2 MSDOS.SYS@81 AUTOEXEC.BAT@156 ZZZ.TXT@158", "delete: " + got);
+  Check(FirstRootEntries(img) == sysEntries, "delete: root entries 0, 1: " + FirstRootEntries(img));
 }
 
 void TestCreateNew()

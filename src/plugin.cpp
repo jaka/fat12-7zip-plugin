@@ -445,6 +445,67 @@ HRESULT ErrorToHresult(const std::string &err)
   return E_FAIL;
 }
 
+// Reads the first sector of a boot sector file or of a bootable disk image
+// (boot=<file>).  It must start with a jump and end with the 55 AA signature.
+bool ReadBootSector(const std::u16string &path, std::vector<uint8_t> &out, std::string &why)
+{
+  out.assign(512, 0);
+  size_t got = 0;
+#ifdef _WIN32
+  const std::wstring w = ToW(path);
+  const HANDLE f = ::CreateFileW(w.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+                                 FILE_ATTRIBUTE_NORMAL, NULL);
+  if (f == INVALID_HANDLE_VALUE) {
+    why = "cannot open boot sector file";
+    return false;
+  }
+  DWORD n = 0;
+  const BOOL ok = ::ReadFile(f, out.data(), 512, &n, NULL);
+  ::CloseHandle(f);
+  got = ok ? n : 0;
+#else
+  std::string utf8; // file names on Linux are UTF-8
+  for (size_t i = 0; i < path.size(); i++) {
+    uint32_t c = path[i];
+    if (c >= 0xD800 && c < 0xDC00 && i + 1 < path.size()) c = 0x10000 + ((c - 0xD800) << 10) + (path[++i] - 0xDC00);
+    if (c < 0x80) {
+      utf8 += (char)c;
+    }
+    else if (c < 0x800) {
+      utf8 += (char)(0xC0 | (c >> 6));
+      utf8 += (char)(0x80 | (c & 0x3F));
+    }
+    else if (c < 0x10000) {
+      utf8 += (char)(0xE0 | (c >> 12));
+      utf8 += (char)(0x80 | ((c >> 6) & 0x3F));
+      utf8 += (char)(0x80 | (c & 0x3F));
+    }
+    else {
+      utf8 += (char)(0xF0 | (c >> 18));
+      utf8 += (char)(0x80 | ((c >> 12) & 0x3F));
+      utf8 += (char)(0x80 | ((c >> 6) & 0x3F));
+      utf8 += (char)(0x80 | (c & 0x3F));
+    }
+  }
+  FILE *f = std::fopen(utf8.c_str(), "rb");
+  if (!f) {
+    why = "cannot open boot sector file";
+    return false;
+  }
+  got = std::fread(out.data(), 1, 512, f);
+  std::fclose(f);
+#endif
+  if (got < 512) {
+    why = "boot sector file is shorter than 512 bytes";
+    return false;
+  }
+  if (out[510] != 0x55 || out[511] != 0xAA || (out[0] != 0xEB && out[0] != 0xE9)) {
+    why = "not a boot sector (needs a jump at the start and 55 AA at the end)";
+    return false;
+  }
+  return true;
+}
+
 // ------------------------------------------------------------ handler
 
 // clang-format off
@@ -674,6 +735,8 @@ public:
     sizeKB_ = 0;
     askSize_ = false;
     labelSet_ = false;
+    bootPath_.clear();
+    lfn_ = true;
     for (UInt32 i = 0; i < num; i++) {
       const wchar_t *n = names[i];
       const PROPVARIANT &v = values[i];
@@ -721,6 +784,30 @@ public:
             ReportError("volume label contains an invalid character");
             return E_INVALIDARG;
           }
+        }
+      }
+      else if (EqNoCase(n, "boot")) {
+        if (v.vt != VT_BSTR || !v.bstrVal || !v.bstrVal[0]) {
+          ReportError("boot needs a file name: boot=C:\\path\\bootsect.bin");
+          return E_INVALIDARG;
+        }
+        bootPath_ = FromW(v.bstrVal);
+      }
+      else if (EqNoCase(n, "lfn")) {
+        // -mlfn=off / on, -mlfn- / -mlfn+ (VT_BOOL), lfn=0 / 1
+        if (v.vt == VT_EMPTY)
+          lfn_ = true;
+        else if (v.vt == VT_BOOL)
+          lfn_ = v.boolVal != VARIANT_FALSE;
+        else if (v.vt == VT_UI4)
+          lfn_ = v.ulVal != 0;
+        else if (v.vt == VT_BSTR && (EqNoCase(v.bstrVal, "off") || EqNoCase(v.bstrVal, "-")))
+          lfn_ = false;
+        else if (v.vt == VT_BSTR && (EqNoCase(v.bstrVal, "on") || EqNoCase(v.bstrVal, "+")))
+          lfn_ = true;
+        else {
+          ReportError("lfn must be on or off");
+          return E_INVALIDARG;
         }
       }
       // Other names (x, mt, tm, tc, ...) are generic 7-Zip switches; ignore them.
@@ -809,6 +896,16 @@ private:
       opt.serial = img_.VolumeSerial();
       opt.bootSector = &img_.Raw();
     }
+    std::vector<uint8_t> bootFile;
+    if (!bootPath_.empty()) {
+      std::string why;
+      if (!ReadBootSector(bootPath_, bootFile, why)) {
+        ReportError(why + ": " + Narrow(bootPath_));
+        return E_INVALIDARG;
+      }
+      opt.bootSector = &bootFile;
+    }
+    opt.lfn = lfn_;
     opt.nowTicks = NowLocalTicks();
     const uint64_t capacity = opt.geo.ImageBytes();
 
@@ -947,6 +1044,8 @@ private:
   bool askSize_ = false;
   bool labelSet_ = false;
   std::u16string label_;
+  std::u16string bootPath_; // boot=<file>: boot sector to use (empty: keep / default)
+  bool lfn_ = true;         // lfn=off: no long file names
 };
 
 UInt32 WINAPI IsArcFat12(const Byte *p, size_t size)

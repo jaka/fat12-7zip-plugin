@@ -51,7 +51,7 @@ Var InUseChecked
 ; ---------------------------------------------------------------- pages ----
 
 !define MUI_ABORTWARNING
-!define MUI_WELCOMEPAGE_TEXT "This will install the FAT12 floppy image plugin (fat12.dll) into 7-Zip.$\r$\n$\r$\n7-Zip will then be able to create and update .img, .ima, .vfd, .flp and .f12 floppy images.$\r$\n$\r$\nClose 7-Zip before continuing."
+!define MUI_WELCOMEPAGE_TEXT "This will install the FAT12 floppy image plugin (fat12.dll) into 7-Zip.$\r$\n$\r$\n7-Zip will then be able to create and update .ima, .img, .vfd, .flp and .f12 floppy images.$\r$\n$\r$\nClose 7-Zip before continuing."
 !insertmacro MUI_PAGE_WELCOME
 
 ; GPL: show the license, but do not ask the user to accept it (using the
@@ -87,8 +87,8 @@ Var InUseChecked
 
 !define MUI_FINISHPAGE_TEXT "The plugin has been installed.$\r$\n$\r$\nTo check, run 7z i: the format list should include f12 with C (can create) in the flags column.$\r$\n$\r$\nIn the 7-Zip GUI, choose Add to archive and set Archive format to f12 to create a floppy image."
 ; GPL: tell where the source code is.
-!define MUI_FINISHPAGE_LINK "Source code (GNU GPL): github.com/jaka/7zip-f12"
-!define MUI_FINISHPAGE_LINK_LOCATION "https://github.com/jaka/7zip-f12"
+!define MUI_FINISHPAGE_LINK "Source code (GNU GPL): github.com/jaka/fat12-7zip-plugin"
+!define MUI_FINISHPAGE_LINK_LOCATION "https://github.com/jaka/fat12-7zip-plugin"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM

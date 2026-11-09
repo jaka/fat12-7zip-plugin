@@ -149,8 +149,10 @@ jobs:
           ver=${GITHUB_REF_NAME#v}
           mkdir release
           cp "dist/fat12-7zip-plugin-$ver-setup.exe" release/
-          # DLLs for installing by hand: x64/fat12.dll and x86/fat12.dll
-          (cd dist && zip -r "../release/fat12-7zip-plugin-$ver-dll.zip" x64/fat12.dll x86/fat12.dll)
+          # DLLs for installing by hand.  Release files need unique names;
+          # 7-Zip loads every file in Formats, whatever it is called.
+          cp dist/x64/fat12.dll release/fat12-x64.dll
+          cp dist/x86/fat12.dll release/fat12-x86.dll
           (cd release && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
       - name: Create the release
         env:

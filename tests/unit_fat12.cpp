@@ -10,7 +10,8 @@
 //   - generated short names match a reviewed golden list,
 //   - directory-tree building gives a byte-identical image,
 //   - building a big directory takes linear, not quadratic/cubic, time,
-//   - Build refuses trees that Image::Open could not list completely.
+//   - Build refuses trees that Image::Open could not list completely,
+//   - lfn=off and copied boot sectors (boot code is kept).
 //
 // Build without AddressSanitizer (it replaces operator new itself):
 //   g++ -std=c++17 -O2 -fsanitize=undefined tests/unit_fat12.cpp src/fat12.cpp
@@ -21,6 +22,7 @@
 
 #include <malloc.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -327,9 +329,10 @@ void TestTreeBuilding()
   std::vector<uint8_t> img;
   std::string err;
   const bool ok = fat12::Build(o, it, img, &err);
-  // Image produced by the original sibling-scan implementation.  If this
+  // Image produced by the original sibling-scan implementation, with the
+  // volume label moved after the root files (1.1.0).  If this
   // changes, the directory layout changed: check that it was intended.
-  const uint64_t kExpected = 0xff0e48eef19925ddull;
+  const uint64_t kExpected = 0x7f9afd5cfe3b5b99ull;
   char hex[32];
   std::snprintf(hex, sizeof hex, "%016llx", (unsigned long long)Fnv1a(img));
   Check(ok && Fnv1a(img) == kExpected, std::string("tree image unchanged (fnv1a ") + hex + ")");
@@ -396,6 +399,47 @@ void TestBuildLimits()
         "tree over the total path length limit is rejected (" + err + ")");
 }
 
+// lfn=off writes 8.3 names only; a copied boot sector keeps its boot code,
+// including DOS 3.x code where DOS 4+ has the extended BPB (offsets 36-61).
+void TestBuildOptions()
+{
+  std::printf("build options (lfn=off, boot sector)\n");
+  fat12::BuildOptions o = FixedOptions(1440);
+  std::vector<fat12::NewItem> it(2);
+  it[0].path = u"A Long File Name.txt";
+  it[1].path = u"readme.txt";
+  o.lfn = false;
+  std::vector<uint8_t> img;
+  std::string err;
+  bool ok = fat12::Build(o, it, img, &err);
+  fat12::Image im;
+  ok = ok && im.Open(img) && !im.HeadersWarning() && im.Items().size() == 2;
+  const uint32_t root = 19 * 512;
+  int lfnEntries = 0;
+  for (uint32_t e = root; e < root + 224 * 32; e += 32)
+    if (img[e] != 0 && img[e + 11] == 0x0F) lfnEntries++;
+  Check(ok && lfnEntries == 0 && im.Items()[0].path == u"ALONGF~1.TXT" && im.Items()[1].path == u"README.TXT",
+        "lfn=off: no LFN entries, uppercase 8.3 names");
+
+  std::vector<uint8_t> boot(512, 0);
+  boot[0] = 0xEB; // DOS 3.3 style: jump to 0x36, code from 0x24 on
+  boot[1] = 0x34;
+  boot[2] = 0x90;
+  for (size_t i = 0x24; i < 510; i++) boot[i] = (uint8_t)(i * 7 + 3);
+  boot[510] = 0x55;
+  boot[511] = 0xAA;
+  o = FixedOptions(1440);
+  o.bootSector = &boot;
+  ok = fat12::Build(o, it, img, &err) && im.Open(img) && !im.HeadersWarning();
+  Check(ok && std::equal(boot.begin() + 0x24, boot.begin() + 510, img.begin() + 0x24) && img[19] == 0x40 &&
+            img[20] == 0x0B,
+        "DOS 3.3 boot sector: code kept, geometry written");
+  boot[1] = 0x3C; // DOS 4+ style: jump to 0x3E, extended BPB in front of the code
+  ok = fat12::Build(o, it, img, &err) && im.Open(img) && !im.HeadersWarning();
+  Check(ok && std::equal(boot.begin() + 0x3E, boot.begin() + 510, img.begin() + 0x3E) && img[38] == 0x29,
+        "DOS 4+ boot sector: code kept, extended BPB written");
+}
+
 int main(int argc, char **argv)
 {
   if (argc < 2) {
@@ -416,6 +460,7 @@ int main(int argc, char **argv)
   TestTreeBuilding();
   TestBigDirectoryTime();
   TestBuildLimits();
+  TestBuildOptions();
   std::printf(g_failures ? "SOME UNIT TESTS FAILED\n" : "ALL UNIT TESTS PASSED\n");
   return g_failures ? 1 : 0;
 }

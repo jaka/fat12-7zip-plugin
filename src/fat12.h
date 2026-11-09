@@ -191,8 +191,12 @@ struct BuildOptions {
   Geometry geo;
   std::u16string label; // empty = no volume label
   uint32_t serial = 0;
-  uint64_t nowTicks = 0;                            // used for items without times
-  const std::vector<uint8_t> *bootSector = nullptr; // keep boot code from old image
+  uint64_t nowTicks = 0; // used for items without times
+  // Boot sector to start from (the old image's on update, or a boot sector
+  // file): its first 512 bytes are copied, then the geometry fields are
+  // filled in, except those that overlap its boot code (see Build).
+  const std::vector<uint8_t> *bootSector = nullptr;
+  bool lfn = true; // false: no long file name entries, uppercase 8.3 names only
 };
 
 // Builds a complete image.  Returns false and sets *err when the items do not
